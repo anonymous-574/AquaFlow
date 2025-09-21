@@ -115,7 +115,7 @@ export const clearAuthToken = () => {
 // API Base URL is already defined at the top of the file
 
 // Generic API request function
-const apiRequest = async <T>(
+export const apiRequest = async <T>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> => {

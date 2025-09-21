@@ -14,16 +14,24 @@ export default function ConservationHubPage() {
   return (
     <main className="flex-1 p-6 space-y-8">
       {/* Hero Section */}
-      <section className="bg-white rounded-lg shadow p-8 text-center">
-        <h1 className="text-2xl font-bold">Your Journey to Water Wisdom</h1>
-        <p className="text-gray-600 mt-2">
-          Discover practical tips, engage in fun challenges, and track your
-          progress towards a more sustainable water footprint. Every drop counts!
-        </p>
-        <button className="mt-4 px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
-          Join a Challenge
-        </button>
-      </section>
+      <section className="bg-blue-100 rounded-lg shadow p-8 flex flex-col md:flex-row items-center justify-between">
+  <div className="md:w-1/2 text-center md:text-left">
+    <h1 className="text-2xl font-bold">Your Journey to Water Wisdom</h1>
+    <p className="text-gray-600 mt-2">
+      Discover practical tips, engage in fun challenges, and track your
+      progress towards a more sustainable water footprint. Every drop counts!
+    </p>
+    <button className="mt-4 px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
+      Join a Challenge
+    </button>
+  </div>
+  <img
+    src="/savewater.jpg" // Change this to your actual image path
+    alt="Hands holding water"
+    className="mt-6 md:mt-0 md:ml-8 w-full md:w-1/3 rounded"
+  />
+</section>
+
 
       {/* Progress Section */}
       <section>

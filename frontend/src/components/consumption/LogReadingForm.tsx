@@ -8,10 +8,65 @@ import { CalendarIcon } from "lucide-react";
 import { format } from "date-fns";
 import { useState } from "react";
 import { motion } from "framer-motion";
+import { useToast } from "@/hooks/use-toast";
+import { apiRequest } from "@/services/api";
 
 export function LogReadingForm() {
   const [date, setDate] = useState<Date | undefined>(new Date());
-  const [reading, setReading] = useState("12345");
+  const [reading, setReading] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const { toast } = useToast();
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (!reading || !date) {
+      toast({
+        title: "Error",
+        description: "Please fill in all fields",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (isNaN(parseFloat(reading)) || parseFloat(reading) <= 0) {
+      toast({
+        title: "Error",
+        description: "Please enter a valid positive number for the reading",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsSubmitting(true);
+    
+    try {
+      const response = await apiRequest('/log_reading', {
+        method: 'POST',
+        body: JSON.stringify({
+          reading: parseFloat(reading),
+          timestamp: date.toISOString()
+        })
+      });
+      
+      toast({
+        title: "Success",
+        description: "Water reading logged successfully",
+      });
+      
+      // Reset form
+      setReading("");
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to log reading. Please try again.",
+        variant: "destructive",
+      });
+      console.error("Error logging reading:", error);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   return (
     <motion.div
@@ -23,42 +78,53 @@ export function LogReadingForm() {
           <CardTitle>Log New Reading</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="meter-reading">Current Meter Reading (Litres)</Label>
-            <Input
-              id="meter-reading"
-              placeholder="e.g., 12345"
-              value={reading}
-              onChange={(e) => setReading(e.target.value)}
-            />
-          </div>
-          
-          <div className="space-y-2">
-            <Label>Date of Reading</Label>
-            <Popover>
-              <PopoverTrigger asChild>
-                <Button
-                  variant="outline"
-                  className="w-full justify-start text-left font-normal"
-                >
-                  <CalendarIcon className="mr-2 h-4 w-4" />
-                  {date ? format(date, "yyyy-MM-dd") : "Pick a date"}
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-auto p-0" align="start">
-                <Calendar
-                  mode="single"
-                  selected={date}
-                  onSelect={setDate}
-                  initialFocus
-                />
-              </PopoverContent>
-            </Popover>
-          </div>
-          
-          <Button className="w-full bg-primary hover:bg-primary-hover">
-            Save Reading
-          </Button>
+          <form onSubmit={handleSubmit}>
+            <div className="space-y-2">
+              <Label htmlFor="meter-reading">Current Meter Reading (Litres)</Label>
+              <Input
+                id="meter-reading"
+                placeholder="e.g., 12345"
+                value={reading}
+                onChange={(e) => setReading(e.target.value)}
+                type="number"
+                min="0"
+                step="0.01"
+                required
+              />
+            </div>
+            
+            <div className="space-y-2 mt-4">
+              <Label>Date of Reading</Label>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full justify-start text-left font-normal"
+                  >
+                    <CalendarIcon className="mr-2 h-4 w-4" />
+                    {date ? format(date, "yyyy-MM-dd") : "Pick a date"}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="start">
+                  <Calendar
+                    mode="single"
+                    selected={date}
+                    onSelect={setDate}
+                    initialFocus
+                  />
+                </PopoverContent>
+              </Popover>
+            </div>
+            
+            <Button 
+              type="submit" 
+              className="w-full bg-primary hover:bg-primary-hover mt-4"
+              disabled={isSubmitting}
+            >
+              {isSubmitting ? "Saving..." : "Save Reading"}
+            </Button>
+          </form>
         </CardContent>
       </Card>
     </motion.div>
