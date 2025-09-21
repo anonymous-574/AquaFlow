@@ -47,11 +47,28 @@ export default function SocietyDashboardPage() {
       className="space-y-6"
     >
       {/* Header */}
-      <div className="space-y-2">
-        <h1 className="text-3xl font-bold text-foreground">Society Management Dashboard</h1>
-        <p className="text-muted-foreground">
-          Centralized platform for managing water resources and communication within your society.
-        </p>
+      <div className="relative bg-gradient-to-r from-primary/10 to-primary/5 rounded-xl p-8 mb-8 overflow-hidden">
+        <div className="absolute inset-0 bg-[url('/savewater.jpg')] bg-cover bg-center opacity-10"></div>
+        <div className="relative z-10 space-y-4">
+          <h1 className="text-4xl font-bold text-foreground">Society Management Dashboard</h1>
+          <p className="text-muted-foreground text-lg max-w-2xl">
+            Centralized platform for managing water resources and communication within your society.
+          </p>
+          <div className="flex items-center space-x-4 text-sm text-muted-foreground">
+            <div className="flex items-center space-x-2">
+              <div className="w-3 h-3 bg-status-success rounded-full"></div>
+              <span>Real-time monitoring</span>
+            </div>
+            <div className="flex items-center space-x-2">
+              <div className="w-3 h-3 bg-primary rounded-full"></div>
+              <span>Smart analytics</span>
+            </div>
+            <div className="flex items-center space-x-2">
+              <div className="w-3 h-3 bg-status-warning rounded-full"></div>
+              <span>Automated alerts</span>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* KPI Cards */}

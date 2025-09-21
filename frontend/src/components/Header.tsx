@@ -34,8 +34,14 @@ export function Header() {
     <header className="bg-primary text-primary-foreground px-6 py-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center space-x-8">
-          <div className="flex items-center space-x-2">
-            <Droplet className="h-6 w-6" />
+          <div className="flex items-center space-x-3">
+            <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center">
+              <Droplet className="h-6 w-6 text-white" />
+            </div>
+            <div>
+              <h1 className="text-xl font-bold text-white">AquaFlow</h1>
+              <p className="text-xs text-white/80">Water Management</p>
+            </div>
           </div>
           
           <nav className="hidden lg:flex items-center space-x-1">

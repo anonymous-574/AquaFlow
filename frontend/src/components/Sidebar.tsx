@@ -39,8 +39,11 @@ export function Sidebar() {
   ];
 
   return (
-    <aside className="w-64 bg-sidebar-bg border-r border-border h-[calc(100vh-80px)] p-4">
-      <nav className="space-y-2">
+    <aside className="w-64 bg-sidebar-bg border-r border-border h-[calc(100vh-80px)] p-4 relative">
+      {/* Background Pattern */}
+      <div className="absolute inset-0 bg-gradient-to-b from-primary/5 to-transparent opacity-30"></div>
+      
+      <nav className="space-y-2 relative z-10">
         {navItems.map((item) => {
           const Icon = item.icon;
           return (

@@ -14,23 +14,46 @@ export default function ConservationHubPage() {
   return (
     <main className="flex-1 p-6 space-y-8">
       {/* Hero Section */}
-      <section className="bg-blue-100 rounded-lg shadow p-8 flex flex-col md:flex-row items-center justify-between">
-  <div className="md:w-1/2 text-center md:text-left">
-    <h1 className="text-2xl font-bold">Your Journey to Water Wisdom</h1>
-    <p className="text-gray-600 mt-2">
-      Discover practical tips, engage in fun challenges, and track your
-      progress towards a more sustainable water footprint. Every drop counts!
-    </p>
-    <button className="mt-4 px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
-      Join a Challenge
-    </button>
-  </div>
-  <img
-    src="/savewater.jpg" // Change this to your actual image path
-    alt="Hands holding water"
-    className="mt-6 md:mt-0 md:ml-8 w-full md:w-1/3 rounded"
-  />
-</section>
+      <section className="bg-gradient-to-r from-blue-100 to-blue-50 rounded-lg shadow-lg p-8 flex flex-col md:flex-row items-center justify-between relative overflow-hidden">
+        <div className="absolute inset-0 bg-[url('/savewater.jpg')] bg-cover bg-center opacity-10"></div>
+        <div className="md:w-1/2 text-center md:text-left relative z-10">
+          <h1 className="text-3xl font-bold text-gray-800 mb-4">Your Journey to Water Wisdom</h1>
+          <p className="text-gray-600 text-lg mb-6">
+            Discover practical tips, engage in fun challenges, and track your
+            progress towards a more sustainable water footprint. Every drop counts!
+          </p>
+          <div className="flex flex-wrap gap-4 mb-6">
+            <div className="flex items-center space-x-2 text-sm text-gray-600">
+              <div className="w-3 h-3 bg-green-500 rounded-full"></div>
+              <span>Eco-friendly tips</span>
+            </div>
+            <div className="flex items-center space-x-2 text-sm text-gray-600">
+              <div className="w-3 h-3 bg-blue-500 rounded-full"></div>
+              <span>Interactive challenges</span>
+            </div>
+            <div className="flex items-center space-x-2 text-sm text-gray-600">
+              <div className="w-3 h-3 bg-yellow-500 rounded-full"></div>
+              <span>Progress tracking</span>
+            </div>
+          </div>
+          <button className="px-8 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow-lg">
+            Join a Challenge
+          </button>
+        </div>
+        <div className="mt-6 md:mt-0 md:ml-8 w-full md:w-1/3 relative">
+          <img
+            src="/savewater.jpg"
+            alt="Hands holding water"
+            className="w-full rounded-lg shadow-lg"
+          />
+          <div className="absolute -top-2 -right-2 w-8 h-8 bg-yellow-400 rounded-full flex items-center justify-center">
+            <span className="text-lg">💧</span>
+          </div>
+          <div className="absolute -bottom-2 -left-2 w-6 h-6 bg-green-400 rounded-full flex items-center justify-center">
+            <span className="text-sm">🌱</span>
+          </div>
+        </div>
+      </section>
 
 
       {/* Progress Section */}

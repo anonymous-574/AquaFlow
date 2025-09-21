@@ -4,6 +4,8 @@ import L, { LatLngTuple } from "leaflet";
 import tankerImg from "./s-1.png"; 
 import { useSuppliers } from "@/hooks/useAPI";
 import { Supplier } from "@/services/api";
+import { useContext } from "react";
+import { FilterContext } from "@/pages/MarketplacePage";
 
 // Import Leaflet CSS
 import "leaflet/dist/leaflet.css";
@@ -20,7 +22,11 @@ L.Icon.Default.mergeOptions({
 });
 
 export function TankerMap() {
-  const { data: suppliers, isLoading, error } = useSuppliers();
+  const { data: allSuppliers, isLoading, error } = useSuppliers();
+  const { filteredSuppliers } = useContext(FilterContext);
+  
+  // Use filtered suppliers if available, otherwise use all suppliers
+  const suppliers = filteredSuppliers.length > 0 ? filteredSuppliers : (allSuppliers || []);
   
   // Default map center (Pune)
   const mapCenter: LatLngTuple = [18.5204, 73.8567];
@@ -36,11 +42,18 @@ export function TankerMap() {
   ];
 
   return (
-    <Card className="w-full">
-      <CardHeader>
-        <CardTitle>Tanker Locations Map</CardTitle>
+    <Card className="w-full relative overflow-hidden">
+      {/* Background Pattern */}
+      <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-primary/10 opacity-30"></div>
+      
+      <CardHeader className="relative z-10">
+        <CardTitle className="flex items-center space-x-2">
+          <span className="text-2xl">🗺️</span>
+          <span>Tanker Locations Map</span>
+        </CardTitle>
+        <p className="text-sm text-muted-foreground mt-1">Find water tankers near your location</p>
       </CardHeader>
-      <CardContent>
+      <CardContent className="relative z-10">
         <div className="w-full h-64 rounded-lg overflow-hidden">
           <MapContainer
             center={mapCenter}

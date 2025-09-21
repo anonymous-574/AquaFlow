@@ -43,11 +43,15 @@ export function LoginForm() {
   };
 
   return (
-    <Card className="w-full max-w-md mx-auto">
-      <CardHeader>
-        <CardTitle className="text-center">Login</CardTitle>
+    <Card className="w-full max-w-md mx-auto relative overflow-hidden">
+      {/* Background Pattern */}
+      <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-primary/10 opacity-50"></div>
+      
+      <CardHeader className="relative z-10">
+        <CardTitle className="text-center text-2xl font-bold">Welcome Back</CardTitle>
+        <p className="text-center text-muted-foreground mt-2">Sign in to your account</p>
       </CardHeader>
-      <CardContent>
+      <CardContent className="relative z-10">
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="identifier">Username or Email</Label>

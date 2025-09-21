@@ -24,8 +24,8 @@ export function TankerGrid() {
   const { toast } = useToast();
   const [bookingSupplier, setBookingSupplier] = useState<number | null>(null);
   
-  // Use filtered suppliers if available, otherwise use all suppliers
-  const suppliers = filteredSuppliers.length > 0 ? filteredSuppliers : allSuppliers;
+  // Use filtered suppliers if they exist, otherwise use all suppliers
+  const suppliers = filteredSuppliers.length > 0 ? filteredSuppliers : (allSuppliers || []);
   
   const handleBookTanker = async (supplier: any) => {
     try {
