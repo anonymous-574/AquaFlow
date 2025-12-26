@@ -2,10 +2,39 @@
 from datetime import datetime, timedelta
 from models import WaterReading
 import math
+import requests
 
-def haversine(lat1, lon1, lat2, lon2):
+def get_road_metrics(lat1, lon1, lat2, lon2):
     """
-    Calculate distance between two points using Haversine formula.
+    Calculate actual driving distance and duration using OSRM (OpenStreetMap).
+    Returns: (distance_km, duration_minutes)
+    """
+    # OSRM requires coordinates in (longitude, latitude) format
+    url = f"http://router.project-osrm.org/route/v1/driving/{lon1},{lat1};{lon2},{lat2}?overview=false"
+    
+    try:
+        response = requests.get(url, timeout=5) # 5 second timeout
+        if response.status_code == 200:
+            data = response.json()
+            if data.get("routes"):
+                # OSRM returns distance in meters and duration in seconds
+                meters = data["routes"][0]["distance"]
+                seconds = data["routes"][0]["duration"]
+                
+                distance_km = meters / 1000
+                duration_min = seconds / 60
+                
+                return distance_km, duration_min
+    except Exception as e:
+        print(f"Error fetching OSRM data: {e}")
+        
+    # Fallback to Haversine if API fails
+    print("Falling back to Haversine calculation...")
+    return haversine_fallback(lat1, lon1, lat2, lon2)
+
+def haversine_fallback(lat1, lon1, lat2, lon2):
+    """
+    Fallback Haversine calculation if OSM API is down.
     """
     R = 6371  # Earth radius in km
     dlat = math.radians(lat2 - lat1)
@@ -13,7 +42,10 @@ def haversine(lat1, lon1, lat2, lon2):
     a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     distance = R * c
-    return distance
+    
+    # Estimate time: Assume 30km/h average speed in city for straight line approximation
+    duration_min = (distance / 30) * 60 
+    return distance, duration_min
 
 def calculate_eta(distance):
     """
@@ -22,43 +54,6 @@ def calculate_eta(distance):
     speed = 40  # km/h
     time_hours = distance / speed
     return time_hours * 60  # minutes
-
-def detect_leak(user_id, threshold=5.0):
-    """
-    Detect potential leaks based on anomalous consumption.
-    """
-    now = datetime.utcnow()
-    last_24h = now - timedelta(hours=24)
-    readings = WaterReading.query.filter(
-        WaterReading.user_id == user_id,
-        WaterReading.timestamp >= last_24h
-    ).order_by(WaterReading.timestamp).all()
-    
-    if len(readings) < 2:
-        return False, 'Insufficient data for leak detection', 0.0
-    
-    overnight_usage = 0.0
-    for i in range(1, len(readings)):
-        time_diff = (readings[i].timestamp - readings[i-1].timestamp).total_seconds() / 3600
-        usage = readings[i].reading - readings[i-1].reading
-        hour = readings[i].timestamp.hour
-        if 0 <= hour < 6 and usage > threshold * time_diff:
-            overnight_usage += usage
-    
-    if overnight_usage > threshold * 6:  # Assuming 6 hours overnight
-        return True, f"Potential leak detected: High overnight usage ({overnight_usage:.2f} units)", overnight_usage
-    return False, 'No leak detected', 0.0
-
-def get_severity(loss):
-    """
-    Get severity and description based on loss.
-    """
-    if loss < 10:
-        return 'minor', 'sporadic drops'
-    elif loss < 50:
-        return 'moderate', 'unusual flow'
-    else:
-        return 'severe', 'major leak'
 
 def get_consumption_reports(user_id, period='daily'):
     """

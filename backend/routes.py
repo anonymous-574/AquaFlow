@@ -1,8 +1,8 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
-from models import db, User, Supplier, TankerOrder, WaterReading, ConservationTip, Society, SupplierOffer, Challenge, UserChallenge, LeakEvent
+from models import db, User, Supplier, TankerOrder, WaterReading, ConservationTip, Society, SupplierOffer, Challenge, UserChallenge
 from auth import register_user, login_user
-from utils import detect_leak, get_consumption_reports, haversine, calculate_eta, get_severity
+from utils import get_consumption_reports, calculate_eta, get_road_metrics
 from datetime import datetime, timedelta
 from collections import defaultdict
 
@@ -105,8 +105,7 @@ def get_suppliers():
         min_cost = min([o.cost for o in offers]) if offers else None
         eta = None
         if user and user.lat is not None and user.long is not None and s.lat is not None and s.long is not None:
-            distance = haversine(user.lat, user.long, s.lat, s.long)
-            eta = calculate_eta(distance)  # in minutes
+            distance, eta = get_road_metrics(user.lat, user.long, s.lat, s.long)
         suppliers_list.append({
             'id': s.id,
             'name': s.name,
@@ -120,7 +119,8 @@ def get_suppliers():
             'long': s.long,
             'offers': offer_data,
             'starting_from': min_cost,
-            'estimated_eta': eta
+            'distance_km': round(distance, 2), 
+            'estimated_eta': round(eta, 0)
         })
     return jsonify(suppliers_list), 200
 
@@ -282,50 +282,6 @@ def consumption_report():
         report['readings'] = [{'timestamp': r.timestamp.isoformat(), 'reading': r.reading} for r in readings]
     return jsonify(report), 200
 
-@api.route('/leak_detection', methods=['GET'])
-@jwt_required()
-def leak_detection():
-    """
-    Check for potential leaks and get history.
-    """
-    user_id = int(get_jwt_identity())
-    threshold = request.args.get('threshold', 5.0, type=float)
-    has_leak, message, loss = detect_leak(user_id, threshold)
-    severity = None
-    desc = None
-    if has_leak:
-        severity, desc = get_severity(loss)
-        now = datetime.utcnow()
-        today = now.date()
-        existing = LeakEvent.query.filter(
-            LeakEvent.user_id == user_id,
-            db.func.date(LeakEvent.detected_date) == today
-        ).first()
-        if not existing:
-            leak = LeakEvent(
-                user_id=user_id,
-                detected_date=now,
-                estimated_loss=loss,
-                severity=severity,
-                description=desc
-            )
-            db.session.add(leak)
-            db.session.commit()
-    history = LeakEvent.query.filter_by(user_id=user_id).order_by(LeakEvent.detected_date.desc()).all()
-    hist_list = [{
-        'date': h.detected_date.isoformat(),
-        'loss': h.estimated_loss,
-        'severity': h.severity,
-        'description': h.description
-    } for h in history]
-    return jsonify({
-        'has_leak': has_leak,
-        'estimated_loss': loss,
-        'severity': severity,
-        'message': message,
-        'description': desc,
-        'history': hist_list
-    }), 200
 
 @api.route('/conservation_tips', methods=['GET'])
 def conservation_tips():
@@ -626,4 +582,47 @@ def society_dashboard():
         'water_saved': water_saved,
         'conservation_impact': percs,
         'scheduled_deliveries': deliveries
+    }), 200
+    
+@api.route('/user_details', methods=['GET'])
+@jwt_required()
+def get_user_details():
+    """
+    Get comprehensive user profile information for UI display.
+    """
+    user_id = int(get_jwt_identity())
+    user = User.query.get(user_id)
+    
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    # Fetch the actual Society Name instead of just the ID
+    society_name = "Not Assigned"
+    society_address = None
+    
+    if user.society_id:
+        society = Society.query.get(user.society_id)
+        if society:
+            society_name = society.name
+            society_address = society.address
+
+    return jsonify({
+        'personal_info': {
+            'username': user.username,
+            'email': user.email,
+            'role': user.role, # 'user', 'supplier', or 'society_admin'
+        },
+        'location_info': {
+            'area': user.area,
+            'city': user.city,
+            'coordinates': {
+                'lat': user.lat,
+                'long': user.long
+            }
+        },
+        'society_info': {
+            'id': user.society_id,
+            'name': society_name,
+            'address': society_address
+        }
     }), 200
