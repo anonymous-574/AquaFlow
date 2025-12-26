@@ -9,3 +9,6 @@ venv/
 
 # OS files
 .DS_Store
+
+node_modules/
+app.db

@@ -4,6 +4,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Layout } from "@/components/Layout";
+import CommunityPage from "@/pages/CommunityPage";
 import MarketplacePage from "@/pages/MarketplacePage";
 import ConsumptionPage from "@/pages/ConsumptionPage";
 import LeakDetectionPage from "@/pages/LeakDetectionPage";
@@ -90,6 +91,13 @@ const App = () => {
               <Layout>
                 <ProtectedRoute>
                   <SocietyDashboardPage />
+                </ProtectedRoute>
+              </Layout>
+            } />
+            <Route path="/community" element={
+              <Layout>
+                <ProtectedRoute>
+                  <CommunityPage />
                 </ProtectedRoute>
               </Layout>
             } />

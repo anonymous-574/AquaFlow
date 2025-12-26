@@ -147,3 +147,53 @@ class UserChallenge(db.Model):
 
     def __repr__(self):
         return f'<UserChallenge {self.id}>'
+
+class Broadcast(db.Model):
+    """
+    Official announcements from Society Admins.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    society_id = db.Column(db.Integer, db.ForeignKey('society.id'), nullable=False)
+    title = db.Column(db.String(128), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    # Only admins can create these, but we don't need a specific user_id link 
+    # if we just want to know it came from the 'Society Office'
+
+    def __repr__(self):
+        return f'<Broadcast {self.title}>'
+
+class DiscussionThread(db.Model):
+    """
+    Community discussion threads started by residents.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    society_id = db.Column(db.Integer, db.ForeignKey('society.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    title = db.Column(db.String(128), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    category = db.Column(db.String(50), default='General') # e.g., 'General', 'Issue', 'Suggestion'
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    author = db.relationship('User', backref='threads')
+    comments = db.relationship('ThreadComment', backref='thread', lazy='dynamic', cascade="all, delete-orphan")
+
+    def __repr__(self):
+        return f'<Thread {self.title}>'
+
+class ThreadComment(db.Model):
+    """
+    Replies to discussion threads.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    thread_id = db.Column(db.Integer, db.ForeignKey('discussion_thread.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    # Relationships
+    author = db.relationship('User', backref='comments')
+
+    def __repr__(self):
+        return f'<Comment {self.id}>'

@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
-from models import db, User, Supplier, TankerOrder, WaterReading, ConservationTip, Society, SupplierOffer, Challenge, UserChallenge
+from models import db, User, Supplier, TankerOrder, WaterReading, ConservationTip, Society, SupplierOffer, Challenge, UserChallenge, Broadcast, DiscussionThread, ThreadComment
 from auth import register_user, login_user
 from utils import get_consumption_reports, calculate_eta, get_road_metrics
 from datetime import datetime, timedelta
@@ -626,3 +626,110 @@ def get_user_details():
             'address': society_address
         }
     }), 200
+
+@api.route('/community/broadcasts', methods=['GET', 'POST'])
+@jwt_required()
+def handle_broadcasts():
+    user_id = int(get_jwt_identity())
+    user = User.query.get(user_id)
+    if not user or not user.society_id:
+        return jsonify({'error': 'User not in a society'}), 403
+
+    # GET: Fetch all broadcasts for the user's society
+    if request.method == 'GET':
+        broadcasts = Broadcast.query.filter_by(society_id=user.society_id)\
+            .order_by(Broadcast.created_at.desc()).all()
+        return jsonify([{
+            'id': b.id,
+            'title': b.title,
+            'content': b.content,
+            'created_at': b.created_at.isoformat()
+        } for b in broadcasts]), 200
+
+    # POST: Create a new broadcast (Admin Only)
+    if request.method == 'POST':
+        if user.role != 'society_admin':
+            return jsonify({'error': 'Only admins can post broadcasts'}), 403
+        
+        data = request.json
+        if not data.get('title') or not data.get('content'):
+            return jsonify({'error': 'Missing title or content'}), 400
+            
+        new_broadcast = Broadcast(
+            society_id=user.society_id,
+            title=data['title'],
+            content=data['content']
+        )
+        db.session.add(new_broadcast)
+        db.session.commit()
+        return jsonify({'message': 'Broadcast posted successfully'}), 201
+
+@api.route('/community/threads', methods=['GET', 'POST'])
+@jwt_required()
+def handle_threads():
+    user_id = int(get_jwt_identity())
+    user = User.query.get(user_id)
+    if not user or not user.society_id:
+        return jsonify({'error': 'User not in a society'}), 403
+
+    # GET: List all discussion threads
+    if request.method == 'GET':
+        threads = DiscussionThread.query.filter_by(society_id=user.society_id)\
+            .order_by(DiscussionThread.created_at.desc()).all()
+        return jsonify([{
+            'id': t.id,
+            'title': t.title,
+            'content': t.content,
+            'category': t.category,
+            'author': t.author.username,
+            'created_at': t.created_at.isoformat(),
+            'comment_count': t.comments.count()
+        } for t in threads]), 200
+
+    # POST: Create a new thread
+    if request.method == 'POST':
+        data = request.json
+        if not data.get('title') or not data.get('content'):
+            return jsonify({'error': 'Missing title or content'}), 400
+            
+        new_thread = DiscussionThread(
+            society_id=user.society_id,
+            user_id=user_id,
+            title=data['title'],
+            content=data['content'],
+            category=data.get('category', 'General')
+        )
+        db.session.add(new_thread)
+        db.session.commit()
+        return jsonify({'message': 'Thread created', 'id': new_thread.id}), 201
+
+@api.route('/community/threads/<int:thread_id>/comments', methods=['GET', 'POST'])
+@jwt_required()
+def handle_comments(thread_id):
+    user_id = int(get_jwt_identity())
+    
+    # GET: Fetch comments for a specific thread
+    if request.method == 'GET':
+        comments = ThreadComment.query.filter_by(thread_id=thread_id)\
+            .order_by(ThreadComment.created_at.asc()).all()
+        return jsonify([{
+            'id': c.id,
+            'content': c.content,
+            'author': c.author.username,
+            'created_at': c.created_at.isoformat()
+        } for c in comments]), 200
+
+    # POST: Add a comment
+    if request.method == 'POST':
+        data = request.json
+        if not data.get('content'):
+            return jsonify({'error': 'Missing content'}), 400
+            
+        new_comment = ThreadComment(
+            thread_id=thread_id,
+            user_id=user_id,
+            content=data['content']
+        )
+        db.session.add(new_comment)
+        db.session.commit()
+        return jsonify({'message': 'Comment added'}), 201
