@@ -2,7 +2,7 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
 from models import db, User, Supplier, TankerOrder, WaterReading, ConservationTip, Society, SupplierOffer, Challenge, UserChallenge
 from auth import register_user, login_user
-from utils import get_consumption_reports, haversine, calculate_eta
+from utils import get_consumption_reports, calculate_eta, get_road_metrics
 from datetime import datetime, timedelta
 from collections import defaultdict
 
@@ -105,8 +105,7 @@ def get_suppliers():
         min_cost = min([o.cost for o in offers]) if offers else None
         eta = None
         if user and user.lat is not None and user.long is not None and s.lat is not None and s.long is not None:
-            distance = haversine(user.lat, user.long, s.lat, s.long)
-            eta = calculate_eta(distance)  # in minutes
+            distance, eta = get_road_metrics(user.lat, user.long, s.lat, s.long)
         suppliers_list.append({
             'id': s.id,
             'name': s.name,
@@ -120,7 +119,8 @@ def get_suppliers():
             'long': s.long,
             'offers': offer_data,
             'starting_from': min_cost,
-            'estimated_eta': eta
+            'distance_km': round(distance, 2), 
+            'estimated_eta': round(eta, 0)
         })
     return jsonify(suppliers_list), 200
 
@@ -582,4 +582,47 @@ def society_dashboard():
         'water_saved': water_saved,
         'conservation_impact': percs,
         'scheduled_deliveries': deliveries
+    }), 200
+    
+@api.route('/user_details', methods=['GET'])
+@jwt_required()
+def get_user_details():
+    """
+    Get comprehensive user profile information for UI display.
+    """
+    user_id = int(get_jwt_identity())
+    user = User.query.get(user_id)
+    
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    # Fetch the actual Society Name instead of just the ID
+    society_name = "Not Assigned"
+    society_address = None
+    
+    if user.society_id:
+        society = Society.query.get(user.society_id)
+        if society:
+            society_name = society.name
+            society_address = society.address
+
+    return jsonify({
+        'personal_info': {
+            'username': user.username,
+            'email': user.email,
+            'role': user.role, # 'user', 'supplier', or 'society_admin'
+        },
+        'location_info': {
+            'area': user.area,
+            'city': user.city,
+            'coordinates': {
+                'lat': user.lat,
+                'long': user.long
+            }
+        },
+        'society_info': {
+            'id': user.society_id,
+            'name': society_name,
+            'address': society_address
+        }
     }), 200
