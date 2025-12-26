@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from models import db, User, Supplier, Society, ConservationTip, SupplierOffer, Challenge, UserChallenge, WaterReading, TankerOrder, LeakEvent
+from models import db, User, Supplier, Society, ConservationTip, SupplierOffer, Challenge, UserChallenge, WaterReading, TankerOrder
 from app import app
 
 with app.app_context():
@@ -104,12 +104,5 @@ with app.app_context():
     order4 = TankerOrder(supplier_id=4, society_id=1, volume=12000.0, price=4000.0, status='pending', delivery_time=now + timedelta(hours=4))
     order5 = TankerOrder(user_id=1, supplier_id=1, society_id=1, volume=1000.0, price=500.0, status='en_route', delivery_time=now + timedelta(hours=3))
     db.session.add_all([order1, order2, order3, order4, order5])
-
-    # Add leak events for john_doe
-    leak1 = LeakEvent(user_id=1, detected_date=now - timedelta(days=1), estimated_loss=15.0, severity='moderate', description='Unusual flow detected')
-    leak2 = LeakEvent(user_id=1, detected_date=now - timedelta(days=5), estimated_loss=8.0, severity='minor', description='Sporadic drops')
-    leak3 = LeakEvent(user_id=1, detected_date=now - timedelta(days=10), estimated_loss=60.0, severity='severe', description='Major leak')
-    leak4 = LeakEvent(user_id=1, detected_date=now - timedelta(days=15), estimated_loss=25.0, severity='moderate', description='Unusual flow detected')
-    db.session.add_all([leak1, leak2, leak3, leak4])
-
+    
     db.session.commit()

@@ -23,43 +23,6 @@ def calculate_eta(distance):
     time_hours = distance / speed
     return time_hours * 60  # minutes
 
-def detect_leak(user_id, threshold=5.0):
-    """
-    Detect potential leaks based on anomalous consumption.
-    """
-    now = datetime.utcnow()
-    last_24h = now - timedelta(hours=24)
-    readings = WaterReading.query.filter(
-        WaterReading.user_id == user_id,
-        WaterReading.timestamp >= last_24h
-    ).order_by(WaterReading.timestamp).all()
-    
-    if len(readings) < 2:
-        return False, 'Insufficient data for leak detection', 0.0
-    
-    overnight_usage = 0.0
-    for i in range(1, len(readings)):
-        time_diff = (readings[i].timestamp - readings[i-1].timestamp).total_seconds() / 3600
-        usage = readings[i].reading - readings[i-1].reading
-        hour = readings[i].timestamp.hour
-        if 0 <= hour < 6 and usage > threshold * time_diff:
-            overnight_usage += usage
-    
-    if overnight_usage > threshold * 6:  # Assuming 6 hours overnight
-        return True, f"Potential leak detected: High overnight usage ({overnight_usage:.2f} units)", overnight_usage
-    return False, 'No leak detected', 0.0
-
-def get_severity(loss):
-    """
-    Get severity and description based on loss.
-    """
-    if loss < 10:
-        return 'minor', 'sporadic drops'
-    elif loss < 50:
-        return 'moderate', 'unusual flow'
-    else:
-        return 'severe', 'major leak'
-
 def get_consumption_reports(user_id, period='daily'):
     """
     Generate consumption reports for specified period.

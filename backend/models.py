@@ -147,17 +147,3 @@ class UserChallenge(db.Model):
 
     def __repr__(self):
         return f'<UserChallenge {self.id}>'
-
-class LeakEvent(db.Model):
-    """
-    LeakEvent model for logging detected leaks.
-    """
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    detected_date = db.Column(db.DateTime, default=datetime.utcnow)
-    estimated_loss = db.Column(db.Float, nullable=False)
-    severity = db.Column(db.String(20), nullable=False)
-    description = db.Column(db.String(256), nullable=False)
-
-    def __repr__(self):
-        return f'<LeakEvent {self.id}>'
