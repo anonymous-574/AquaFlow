@@ -210,12 +210,13 @@ export default function MarketplacePage() {
                   <p className="text-sm text-muted-foreground">
                     {selectedSupplier.area}, {selectedSupplier.city}
                   </p>
-                  <p className="text-lg font-bold mt-2">
-                    ₹{selectedSupplier.starting_from || selectedSupplier.offers?.[0]?.cost || 1500}
-                  </p>
+                  <div className="flex items-center space-x-1 text-sm text-muted-foreground mt-2">
+                    <span>⭐ {selectedSupplier.rating}</span>
+                    <span>•</span>
+                    <span>{selectedSupplier.num_reviews} reviews</span>
+                  </div>
                 </div>
                 <Checkout
-                  amount={selectedSupplier.starting_from || selectedSupplier.offers?.[0]?.cost || 1500}
                   bookingId={bookingId}
                   supplier={selectedSupplier}
                   onSuccess={() => {
