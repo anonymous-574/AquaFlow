@@ -85,6 +85,7 @@ The system is deployed on **AWS ECS (Fargate)** using a **containerized microser
          │ AWS RDS – PostgreSQL 16      │
          │ (Single Source of Truth)     │
          └──────────────────────────────┘
+```
 
 ## 🛠️ Components & Tech Stack
 
