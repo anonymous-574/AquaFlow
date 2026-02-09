@@ -39,7 +39,7 @@ with app.app_context():
     users.append(supplier_user)
 
     # 20 Residents
-    first_names = ["Aarav", "John", "Aditya", "Vihaan", "Arjun", "Sai", "Reyansh", "Ayaan", "Krishna", "Ishaan", "Diya", "Saanvi", "Ananya", "Aadhya", "Pari", "Saanvi", "Myra", "Riya", "Aarohi", "Anika"]
+    first_names = ["John","Aarav", "Aditya", "Vihaan", "Arjun", "Sai", "Reyansh", "Ayaan", "Krishna", "Ishaan", "Diya", "Saanvi", "Ananya", "Aadhya", "Pari", "Saanvi", "Myra", "Riya", "Aarohi", "Anika"]
     
     for i, name in enumerate(first_names):
         lat, long = get_random_coordinates(base_lat, base_long)
