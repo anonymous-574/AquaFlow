@@ -18,6 +18,7 @@ services:
     env_file:
       - ./backend/.env
     environment:
+      #replace with actual url
       - DATABASE_URL=postgresql://user:password@db:5432/waterdb
       #- FLASK_ENV=production
       - FLASK_ENV=development
@@ -80,6 +81,29 @@ services:
       spark://spark-master:7077
     depends_on:
       - spark-master
+    networks:
+      - water_network
+
+# --- Monitoring Layer ---
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: water_mgmt_prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    networks:
+      - water_network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: water_mgmt_grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin  # Default password
+    depends_on:
+      - prometheus
     networks:
       - water_network
 

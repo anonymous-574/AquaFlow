@@ -10,3 +10,4 @@ datetime
 stripe
 Flask-Caching
 redis
+prometheus-flask-exporter==0.23.0
