@@ -9,11 +9,13 @@ from sqlalchemy.exc import OperationalError, ProgrammingError, IntegrityError
 from config import Config
 from models import db,cache
 from routes import api
+from prometheus_flask_exporter import PrometheusMetrics
 
 app = Flask(__name__)
 app.config.from_object(Config)
 
 # Initialize extensions
+metrics = PrometheusMetrics(app)
 db.init_app(app)
 cache.init_app(app)
 jwt = JWTManager(app)
