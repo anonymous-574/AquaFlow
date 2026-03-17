@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
-from models import db, User, Supplier, TankerOrder, WaterReading, ConservationTip, Society, SupplierOffer, Challenge, UserChallenge, Broadcast, DiscussionThread, ThreadComment, SocietyMonthlySummary
+from models import UserDailyUsage, db, User, Supplier, TankerOrder, WaterReading, ConservationTip, Society, SupplierOffer, Challenge, UserChallenge, Broadcast, DiscussionThread, ThreadComment
 from auth import register_user, login_user
 from utils import get_consumption_reports, calculate_eta, get_road_metrics
 from datetime import datetime, timedelta
@@ -8,7 +8,7 @@ from collections import defaultdict
 import stripe 
 from dotenv import load_dotenv
 import os
-from sqlalchemy import func, distinct
+from sqlalchemy import func, distinct , extract
 from app import cache,db
 
 load_dotenv()
@@ -322,30 +322,40 @@ def log_reading():
 @api.route('/consumption_report', methods=['GET'])
 @jwt_required()
 def consumption_report():
-    """
-    Get consumption report.
-    """
     user_id = int(get_jwt_identity())
-    period = request.args.get('period', 'daily')
-    detailed = request.args.get('detailed', False, type=bool)
-    report = get_consumption_reports(user_id, period)
-    if 'error' in report:
-        return jsonify({'error': report['error']}), 400
-    if detailed:
-        now = datetime.utcnow()
-        if period == 'daily':
-            start = now - timedelta(days=1)
-        elif period == 'weekly':
-            start = now - timedelta(weeks=1)
-        elif period == 'monthly':
-            start = now - timedelta(days=30)
-        else:
-            start = now - timedelta(days=30)
-        readings = WaterReading.query.filter(
-            WaterReading.user_id == user_id,
-            WaterReading.timestamp >= start
-        ).order_by(WaterReading.timestamp).all()
-        report['readings'] = [{'timestamp': r.timestamp.isoformat(), 'reading': r.reading} for r in readings]
+    period = request.args.get('period', 'daily') # 'daily', 'weekly', 'monthly'
+    
+    now = datetime.utcnow().date()
+    
+    if period == 'weekly':
+        start_date = now - timedelta(days=7)
+    elif period == 'monthly':
+        start_date = now - timedelta(days=30)
+    else: # daily
+        start_date = now - timedelta(days=1)
+
+    # 1. Fetch from the pre-aggregated table!
+    readings = UserDailyUsage.query.filter(
+        UserDailyUsage.user_id == user_id,
+        UserDailyUsage.date >= start_date
+    ).order_by(UserDailyUsage.date).all()
+
+    if not readings:
+        return jsonify({"message": "No data found for this period", "total_usage": 0}), 200
+
+    # 2. Calculate Total
+    total_usage = sum(r.total_usage_liters for r in readings)
+
+    # 3. Format Response
+    report = {
+        "period": period,
+        "total_usage_liters": round(total_usage, 2),
+        "daily_breakdown": [
+            {"date": r.date.isoformat(), "usage": round(r.total_usage_liters, 2)}
+            for r in readings
+        ]
+    }
+    
     return jsonify(report), 200
 
 
@@ -531,7 +541,8 @@ def society_bulk_order():
 @jwt_required()
 def society_dashboard():
     """
-    Get society management dashboard data using Spark Aggregates.
+    Get society management dashboard data using dynamically 
+    aggregated daily data from Spark.
     """
     user_id = int(get_jwt_identity())
     user = User.query.get(user_id)
@@ -545,23 +556,27 @@ def society_dashboard():
     current_year = datetime.utcnow().year
     y_start = datetime(current_year, 1, 1)
 
-    # --- 1. Monthly Consumption (POWERED BY SPARK) ---
-    # Query the summary table directly. 
-    # No more looping through millions of WaterReading rows!
-    spark_summaries = SocietyMonthlySummary.query.filter_by(
-        society_id=society_id,
-        year=current_year
+    # --- 1. Monthly Consumption (Aggregating Spark's Daily Output) ---
+    # We extract the month from the 'date' column and SUM the daily usage
+    monthly_data = db.session.query(
+        extract('month', UserDailyUsage.date).label('month'),
+        func.sum(UserDailyUsage.total_usage_liters).label('total_consumption')
+    ).filter(
+        UserDailyUsage.society_id == society_id,
+        extract('year', UserDailyUsage.date) == current_year
+    ).group_by(
+        extract('month', UserDailyUsage.date)
     ).all()
 
     # Convert to dictionary { month_int: total_float }
-    monthly_consumption = {row.month: row.total_consumption for row in spark_summaries}
+    monthly_consumption = {int(row.month): row.total_consumption for row in monthly_data}
 
     # Fill missing months with 0
     for m in range(1, 13):
         if m not in monthly_consumption:
             monthly_consumption[m] = 0.0
 
-    # --- 2. Lightweight Queries (Can stay as standard SQL) ---
+    # --- 2. Lightweight Queries (Standard SQL) ---
     
     # Tankers Ordered YTD
     orders = TankerOrder.query.filter(
@@ -572,7 +587,6 @@ def society_dashboard():
     total_volume_ytd = sum(o.volume for o in orders)
 
     # Active Initiatives & Water Saved
-    # These tables are usually small, so standard SQL is fine.
     society_users = User.query.filter_by(society_id=society_id).with_entities(User.id).all()
     user_ids = [u.id for u in society_users]
 
@@ -594,7 +608,6 @@ def society_dashboard():
                 UserChallenge.status, func.count(UserChallenge.status)
             ).filter(UserChallenge.user_id.in_(user_ids)).group_by(UserChallenge.status).all()
             
-            # Convert list of tuples [('active', 5), ('pending', 2)] to dict
             counts_dict = {status: count for status, count in counts}
             
             percs['active'] = (counts_dict.get('active', 0) / total_ucs) * 100

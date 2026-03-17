@@ -1,8 +1,11 @@
+import os
 import random
 from datetime import datetime, timedelta
+import pandas as pd
 from werkzeug.security import generate_password_hash
-from models import db, User, Supplier, Society, ConservationTip, SupplierOffer, Challenge, UserChallenge, WaterReading, TankerOrder, SocietyMonthlySummary
+from models import UserMeterState, db, User, Supplier, Society, ConservationTip, SupplierOffer, Challenge, UserChallenge, TankerOrder
 from app import app
+import shutil
 
 def get_random_coordinates(base_lat, base_long, radius=0.01):
     """Generate random coordinates within a small radius of a base point."""
@@ -144,47 +147,74 @@ with app.app_context():
             )
             user_challenges.append(uc)
     db.session.add_all(user_challenges)
+    db.session.commit()
+
+    society_id = 1
+    resident_ids = [u.id for u in User.query.filter_by(role='user').all()]
 
     # ---------------------------------------------------------
-    # 6. Generate Massive Water Reading Data (120 days)
+    # Generate Massive Water Reading Data -> PARQUET FILES
     # ---------------------------------------------------------
-    print(">>> Generating Water Readings (This might take a moment)...")
-    readings = []
-    now = datetime.utcnow()
+    print(">>> Generating IoT Water Readings (Parquet)...")
     
-    # Base reading for meters
+    base_dir = "/app/data/raw/water_readings"
+    # Nuke the old data lake folder if it exists
+    if os.path.exists(base_dir):
+        shutil.rmtree(base_dir)
+    os.makedirs(base_dir, exist_ok=True)
+    
+    now = datetime.utcnow()
+    # Baseline meter readings (e.g., installed 120 days ago)
     current_meter_value = {uid: random.uniform(1000, 5000) for uid in resident_ids}
-
-    for day in range(120, -1, -1): # Last 4 months
-        date_cursor = now - timedelta(days=day)
+    
+    # We will simulate writing daily parquet files
+    for day in range(120, -1, -1):
+        target_date = (now - timedelta(days=day)).date()
+        daily_records = []
         
-        # Readings 3 times a day
-        for hour in [7, 14, 21]: # Morning, Afternoon, Night
+        # 3 readings a day per user
+        for hour in [7, 14, 21]:
             for uid in resident_ids:
-                # Determine usage based on time and randomness
-                # Morning is high usage, afternoon low, night medium
-                if hour == 7:
-                    usage = random.uniform(100, 200) # Morning rush
-                elif hour == 14:
-                    usage = random.uniform(20, 50)   # Afternoon lull
-                else:
-                    usage = random.uniform(50, 100)  # Evening chores
+                if hour == 7: usage = random.uniform(100, 200)
+                elif hour == 14: usage = random.uniform(20, 50)
+                else: usage = random.uniform(50, 100)
                 
-                # Add random spike (e.g. guests, laundry day)
-                if random.random() > 0.9: 
-                    usage += 150
+                if random.random() > 0.9: usage += 150 # Spike
                 
                 current_meter_value[uid] += usage
                 
-                readings.append(WaterReading(
-                    user_id=uid,
-                    society_id=1,
-                    reading=current_meter_value[uid],
-                    timestamp=date_cursor.replace(hour=hour, minute=0, second=0, microsecond=0)
-                ))
-    
-    # Batch insert readings (splitting into chunks if necessary, but 20 users * 120 days * 3 readings = 7200 rows, which is fine for one commit)
-    db.session.add_all(readings)
+                daily_records.append({
+                    "user_id": uid,
+                    "society_id": society_id,
+                    "timestamp": datetime.combine(target_date, datetime.min.time()).replace(hour=hour),
+                    "reading": current_meter_value[uid]
+                })
+        
+        # Write to Parquet Partition
+        df = pd.DataFrame(daily_records)
+        df['timestamp'] = df['timestamp'].astype('datetime64[us]')
+        partition_dir = os.path.join(base_dir, f"date={target_date}")
+        os.makedirs(partition_dir, exist_ok=True)
+        df.to_parquet(
+            os.path.join(partition_dir, "data.parquet"), 
+            engine='pyarrow', 
+            use_deprecated_int96_timestamps=True
+        )
+
+    # ---------------------------------------------------------
+    # Initialize State Table for Spark
+    # ---------------------------------------------------------
+    print(">>> Saving Initial Meter States...")
+    states = []
+    for uid in resident_ids:
+        states.append(UserMeterState(
+            user_id=uid,
+            last_reading=current_meter_value[uid],
+            last_updated=now.date()
+        ))
+    db.session.add_all(states)
+    db.session.commit()
+    print(">>> Database & Data Lake populated successfully!")
 
     # ---------------------------------------------------------
     # 7. Generate Tanker Orders

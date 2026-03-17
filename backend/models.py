@@ -199,12 +199,33 @@ class ThreadComment(db.Model):
 
     def __repr__(self):
         return f'<Comment {self.id}>'
-    
-# Add this to backend/models.py
-class SocietyMonthlySummary(db.Model):
-    __tablename__ = 'society_monthly_summary'
-    # Composite PK for SQLAlchemy mapping
-    society_id = db.Column(db.Integer, primary_key=True)
-    year = db.Column(db.Integer, primary_key=True)
-    month = db.Column(db.Integer, primary_key=True)
-    total_consumption = db.Column(db.Float)
+
+class UserMeterState(db.Model):
+    """
+    State table for Spark. Holds the last known reading so batch processing 
+    knows where to start calculating the next day's delta.
+    """
+    __tablename__ = 'user_meter_state'
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), primary_key=True)
+    last_reading = db.Column(db.Float, nullable=False)
+    last_updated = db.Column(db.Date, nullable=False)
+
+    def __repr__(self):
+        return f'<UserMeterState User:{self.user_id} Reading:{self.last_reading}>'
+
+class UserDailyUsage(db.Model):
+    """
+    Pre-aggregated Daily Usage calculated by PySpark. 
+    The Flask API reads from this table for lightning-fast responses.
+    """
+    __tablename__ = 'user_daily_usage'
+    user_id = db.Column(db.Integer, primary_key=True)
+    date = db.Column(db.Date, primary_key=True)
+    society_id = db.Column(db.Integer)
+    total_usage_liters = db.Column(db.Float)
+
+    # Prevent duplicate entries for the same user on the same day
+    __table_args__ = (db.UniqueConstraint('user_id', 'date', name='uq_user_date'),)
+
+    def __repr__(self):
+        return f'<UserDailyUsage User:{self.user_id} Date:{self.date} Usage:{self.total_usage_liters}>'

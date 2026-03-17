@@ -31,11 +31,15 @@ export interface WaterReading {
   reading: number;
 }
 
+export interface DailyBreakdown {
+  date: string;
+  usage: number;
+}
+
 export interface ConsumptionReport {
-  total_consumption: number;
-  average_daily: number;
-  trend: string;
-  readings?: WaterReading[];
+  period: string;
+  total_usage_liters: number;
+  daily_breakdown: DailyBreakdown[];
 }
 
 export interface ConservationSummary {

@@ -32,25 +32,22 @@ export function RecentReadings() {
   useEffect(() => {
     const fetchReadings = async () => {
       try {
-        const response = await apiRequest<ApiResponse>('/consumption_report?period=weekly&detailed=true', {
+        // Use any here temporarily to bypass strict typing for the quick fix
+        const response = await apiRequest<any>('/consumption_report?period=weekly&detailed=true', {
           method: 'GET'
         });
         
-        // Sort readings by timestamp ascending
-        const sortedReadings = [...response.readings].sort(
-          (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+        // Use daily_breakdown and sort by date
+        const sortedReadings = [...(response.daily_breakdown || [])].sort(
+          (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
         );
         
-        // Calculate consumption differences
-        const tableData: TableReading[] = sortedReadings.map((reading, index) => {
-          const date = format(new Date(reading.timestamp), 'yyyy-MM-dd');
-          const previousReading = index > 0 ? sortedReadings[index - 1].reading : 0;
-          const consumption = reading.reading - previousReading;
-          
+        // Map the new backend data to the table structure
+        const tableData: TableReading[] = sortedReadings.map((item) => {
           return {
-            date,
-            meterReading: reading.reading,
-            consumption: Math.max(0, consumption) // Ensure non-negative
+            date: item.date,
+            meterReading: 0, // Backend no longer sends cumulative readings, just usage
+            consumption: item.usage
           };
         });
 
