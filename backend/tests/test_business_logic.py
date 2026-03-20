@@ -6,6 +6,7 @@ from app import db
 
 # 2. FIX: Import directly from models.py (since it sits next to app.py)
 from models import User, TankerListing, TankerOrder, Challenge, UserChallenge
+from app import app as flask_app
 
 # ==========================================
 # PART A: FINANCIAL & STRIPE TESTS
@@ -14,7 +15,7 @@ from models import User, TankerListing, TankerOrder, Challenge, UserChallenge
 # 3. FIX: Adjust the patch path. 
 # If your stripe logic is inside app.py, use 'app.stripe.PaymentIntent.create'
 # If it is inside a routes.py file, use 'routes.stripe.PaymentIntent.create'
-@patch('app.stripe.PaymentIntent.create') 
+@patch('stripe.PaymentIntent.create') 
 def test_stripe_fractional_currency(mock_stripe, client):
     """Test A.1: Ensures exact fractional amounts are converted to paise."""
     mock_stripe.return_value.client_secret = "pi_123_secret"
@@ -23,7 +24,7 @@ def test_stripe_fractional_currency(mock_stripe, client):
     payload = {"amount": 1250.50, "booking_id": "BK-001"}
     headers = {'Authorization': f'Bearer MOCK_JWT_TOKEN_USER'}
     
-    response = client.post('/create-payment-intent', json=payload, headers=headers)
+    response = client.post('/api/create-payment-intent', json=payload, headers=headers)
     assert response.status_code == 200
     
     # Assert Jenkins/Pytest caught the correct math (1250.50 * 100)
@@ -37,7 +38,7 @@ def test_stripe_minimum_charge(client):
     payload = {"amount": 15.00, "booking_id": "BK-002"}
     headers = {'Authorization': f'Bearer MOCK_JWT_TOKEN_USER'}
     
-    response = client.post('/create-payment-intent', json=payload, headers=headers)
+    response = client.post('/api/create-payment-intent', json=payload, headers=headers)
     
     # Assuming you added validation: if amount < 40: return 400
     assert response.status_code == 400
@@ -46,34 +47,36 @@ def test_stripe_minimum_charge(client):
 # PART B: STATE MACHINE & LOGIC TESTS
 # ==========================================
 
-def test_tanker_availability_lock(client, app_context):
+def test_tanker_availability_lock(client): # Removed app_context
     """Test B.1: Prevent double-booking a tanker."""
-    # Seed a dummy tanker that is already booked
-    tanker = TankerListing(id=1, supplier_id=1, volume=5000, price=2000, status='booked')
-    db.session.add(tanker)
-    db.session.commit()
+    with flask_app.app_context(): # Added context block
+        # Seed a dummy tanker that is already booked
+        tanker = TankerListing(id=1, supplier_id=1, volume=5000, price=2000, status='booked')
+        db.session.add(tanker)
+        db.session.commit()
 
     payload = {"tanker_id": 1, "delivery_date": "2026-10-10"}
     headers = {'Authorization': f'Bearer MOCK_JWT_TOKEN_USER'}
     
-    response = client.post('/book_tanker', json=payload, headers=headers)
+    response = client.post('/api/book_tanker', json=payload, headers=headers)
     
     # Should fail because it's not 'available'
     assert response.status_code in [400, 404]
     assert b"available" in response.data.lower()
 
-def test_challenge_completion_boundary(client, app_context):
+def test_challenge_completion_boundary(client): # Removed app_context
     """Test B.2: Progress hitting 100% triggers completion and points."""
-    # Seed active challenge at 90%
-    uc = UserChallenge(id=1, user_id=1, challenge_id=1, progress=90.0, status='active')
-    chal = Challenge(id=1, eco_points=50, water_save_potential=100)
-    db.session.add_all([uc, chal])
-    db.session.commit()
+    with flask_app.app_context(): # Added context block
+        # Seed active challenge at 90%
+        uc = UserChallenge(id=1, user_id=1, challenge_id=1, progress=90.0, status='active')
+        chal = Challenge(id=1, eco_points=50, water_save_potential=100)
+        db.session.add_all([uc, chal])
+        db.session.commit()
 
     payload = {"progress": 100.0}
     headers = {'Authorization': f'Bearer MOCK_JWT_TOKEN_USER_1'}
     
-    response = client.put('/update_challenge_progress/1', json=payload, headers=headers)
+    response = client.put('/api/update_challenge_progress/1', json=payload, headers=headers)
     
     assert response.status_code == 200
     
@@ -93,7 +96,7 @@ def test_society_bulk_order_rbac_normal_user(client):
     headers = {'Authorization': f'Bearer MOCK_JWT_TOKEN_NORMAL_USER'}
     payload = {"supplier_id": 1, "volume": 5000, "price": 2500, "society_id": 1}
     
-    response = client.post('/society_bulk_order', json=payload, headers=headers)
+    response = client.post('/api/society_bulk_order', json=payload, headers=headers)
     
     # Must be 403 Forbidden
     assert response.status_code == 403
