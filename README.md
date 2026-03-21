@@ -253,7 +253,7 @@ bandit -r .                                  # security scan
 
 ---
 
-### CI/CD Pipeline (Jenkins + SonarQube)
+### Step 7: CI/CD Pipeline (Jenkins + SonarQube)
 
 This project includes a fully containerized local CI/CD environment. On push, Jenkins uses the `Jenkinsfile` to spin up isolated test containers, run the Pytest suite, generate a `coverage.xml` report, and submit it to SonarQube for quality gate evaluation using `sonar-project.properties`.
 
