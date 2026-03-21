@@ -255,12 +255,28 @@ bandit -r .                                  # security scan
 
 ### CI/CD Pipeline (Jenkins + SonarQube)
 
-On push, Jenkins uses `Jenkinsfile` and `docker-compose.cicd.yml` to:
+This project includes a fully containerized local CI/CD environment. On push, Jenkins uses the `Jenkinsfile` to spin up isolated test containers, run the Pytest suite, generate a `coverage.xml` report, and submit it to SonarQube for quality gate evaluation using `sonar-project.properties`.
 
-1. Spin up isolated test containers
-2. Run the full Pytest suite and generate `coverage.xml`
-3. Submit results to SonarQube using `sonar-project.properties` for quality gate evaluation
+To run and manage the local CI/CD stack:
 
+**1. Spin up the CI/CD Environment**
+Start Jenkins and SonarQube in the background using the dedicated CI/CD compose file:
+```bash
+docker-compose -f docker-compose.cicd.yml up -d
+```
+
+**2. Unlock Jenkins**
+On the very first run, Jenkins will be locked. Fetch the initial admin password directly from the container:
+```bash
+docker exec -it water_cicd_jenkins cat /var/jenkins_home/secrets/initialAdminPassword
+```
+
+**3. Access the Dashboards**
+Once the services are healthy, you can access the UI for both tools:
+```bash
+    Jenkins: http://localhost:8080 (Use the password fetched above to complete setup).
+    SonarQube: http://localhost:9000 (Default login is usually admin / admin).
+```
 ---
 
 ### Teardown
@@ -268,4 +284,5 @@ On push, Jenkins uses `Jenkinsfile` and `docker-compose.cicd.yml` to:
 ```bash
 docker-compose down        # stop and remove containers
 docker-compose down -v     # also wipe volumes (full reset)
+docker-compose -f docker-compose.cicd.yml down -v # shut down the CI/CD environment
 ```
