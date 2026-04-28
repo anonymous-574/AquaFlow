@@ -1,199 +1,317 @@
 # Water Consumption Analytics Platform
 
-### A Cloud-Native Distributed System for Utility Data Processing & Analytics
+> A cloud-native distributed system for utility data processing, IoT analytics, and water tanker marketplace operations.
+
+---
+
+## Table of Contents
+
+1. [Overview](#overview)
+2. [Architecture](#architecture)
+   - [High-Level Deployment Diagram](#high-level-deployment-diagram)
+   - [Microservices & Route Mapping](#microservices--route-mapping)
+3. [Key Design Decisions](#key-design-decisions)
+4. [Tech Stack](#tech-stack)
+5. [Architectural Patterns Applied](#architectural-patterns-applied)
+6. [Project Structure](#project-structure)
+7. [Local Setup & Development Guide](#local-setup--development-guide)
+   - [Prerequisites](#prerequisites)
+   - [Step 1: Clone & Configure](#step-1-clone--configure)
+   - [Step 2: Start All Backend Services](#step-2-start-all-backend-services)
+   - [Step 3: Seed the Databases](#step-3-seed-the-databases)
+   - [Step 4: Trigger Spark Analytics Run](#step-4-trigger-spark-analytics-run)
+   - [Step 5: Start the Frontend](#step-5-start-the-frontend)
+   - [Step 6: Access Services](#step-6-access-services)
+   - [Step 7: Grafana Quick Guide](#step-7-grafana-quick-guide)
+   - [Step 8: Tests & Quality Checks](#step-8-tests--quality-checks)
+8. [CI/CD Pipeline — Jenkins + SonarQube](#cicd-pipeline--jenkins--sonarqube)
+   - [Start the CI/CD Stack](#1-start-the-cicd-stack)
+   - [Install Required Jenkins Plugins](#2-install-required-jenkins-plugins)
+   - [Connect Jenkins to SonarQube](#3-connect-jenkins-to-sonarqube)
+   - [Configure SonarQube Scanner Tool](#4-configure-sonarqube-scanner-tool)
+   - [Create the Pipeline Job](#5-create-the-pipeline-job)
+   - [Run the Pipeline](#6-run-the-pipeline)
+   - [Verify SonarQube Results](#7-verify-sonarqube-results)
+9. [Teardown](#teardown)
+10. [Test Credentials](#test-credentials)
 
 ---
 
 ## Overview
 
-The **Water Consumption Analytics Platform** is a cloud-native system for:
+The **Water Consumption Analytics Platform** is a cloud-native system built around two fundamentally different workload profiles:
 
-- low-latency transactional flows (auth, booking, payments, community)
-- scheduled analytical processing of IoT water readings
+- **Transactional workloads** — low-latency, user-facing operations: authentication, water tanker booking, Stripe payments, and a gamified eco-challenges community system.
+- **Analytical workloads** — high-throughput, scheduled batch processing of IoT sensor data for per-unit consumption aggregation, anomaly detection, and conservation reporting.
 
-The codebase was refactored from a monolith into **5 Flask microservices** behind an **Nginx API Gateway**.  
-This separation isolates failures, improves scalability, and keeps Spark batch workloads from degrading API response times.
+The system was deliberately refactored from a monolith into **five independent Flask microservices** sitting behind an **Nginx API Gateway**. This separation ensures that a long-running Spark analytics job cannot degrade API response times, that individual services can be deployed and scaled independently, and that failures are blast-radius contained.
+
+The platform additionally acts as a **marketplace layer** between water tanker operators (suppliers) and residential society administrators — handling real-money payment flows via Stripe and a full order lifecycle state machine.
 
 ---
 
-## Architecture & Key Design Decisions
+## Architecture
+
+### High-Level Deployment Diagram
+
+```
+                          +---------------------------+
+                          |      User Browser         |
+                          |   (React + Vite frontend) |
+                          +-------------+-------------+
+                                        | HTTPS
+                                        v
+                          +---------------------------+
+                          |    Nginx API Gateway      |
+                          |       Port :5001          |
+                          |  (single public ingress)  |
+                          +--+---+---+---+------------+
+                             |   |   |   |
+             +---------------+   |   |   +-------------------+
+             |                   |   |                       |
+             v                   v   v                       v
+     +-------+------+   +--------+-+ +-+--------+  +--------+------+
+     | Auth Service |   | Supplier | | Booking  |  | Gamification  |
+     | :5002        |   | Service  | | Service  |  | Service :5005 |
+     +-------+------+   | :5003    | | :5004    |  +--------+------+
+             |          +----+-----+ +----+-----+           |
+             |               |            |                 |
+             +-------+-------+------------+-----------------+
+                     |
+                     v
+          +----------+-----------+
+          |   IoT Analytics Svc  |
+          |       :5006          |
+          +----------+-----------+
+                     |
+       +-------------+-------------+
+       |                           |
+       v                           v
++------+-------+        +----------+---------+
+| PostgreSQL   |        |  Redis (shared)    |
+| 5 logical    |        |  session + cache   |
+| databases    |        +--------------------+
++--------------+
+       ^
+       |
++------+-------------------------------+
+|  Apache Spark (ephemeral ECS Task)  |
+|  Triggered by EventBridge (3x/day)  |
+|  Reads: S3 / parquet                |
+|  Writes: iot_db (PostgreSQL)        |
++-------------------------------------+
+       ^
+       |
++------+------+
+| IoT Sensor  |
+| Raw Data    |
+| (S3/parquet)|
++-------------+
+
++-------------------+     +-----------------+
+| Prometheus        |<----| Flask /metrics  |
+| (+ redis metrics) |     | (all services)  |
++---------+---------+     +-----------------+
+          |
+          v
+     +----+----+
+     | Grafana |
+     | :3000   |
+     +---------+
+```
+
+**Data flow summary:**
+
+1. IoT sensors write raw consumption records to S3 as Parquet files.
+2. AWS EventBridge triggers the Spark ECS Task on a cron schedule (3× daily).
+3. Spark reads from S3, aggregates consumption by unit/society/time window, and detects anomalies.
+4. Aggregated results are written back to `iot_db` (PostgreSQL).
+5. The IoT Analytics Service serves pre-aggregated data to the frontend — hot queries hit Redis with sub-millisecond latency.
+6. All public traffic enters through the Nginx gateway, which routes by path prefix to the correct microservice.
+
+---
+
+### Microservices & Route Mapping
+
+**1. Auth Service** (`/auth/*`) — Port 5002
+- `GET  /` `GET /ping`
+- `POST /register` `POST /login`
+- `GET|PUT /profile`
+
+**2. Supplier Service** (`/supplier/*`) — Port 5003
+- `GET  /suppliers`
+- `POST /tankers` `GET /tankers/owner` `PUT /tankers/<id>` `DELETE /tankers/<id>` `PATCH /tankers/<id>/status`
+- `GET  /owner/dashboard` `GET /owner/earnings`
+
+**3. Booking Service** (`/bookings/*`) — Port 5004
+- `POST /book_tanker` `GET /track_order/<id>` `PUT /update_order/<id>`
+- `POST /bookings` `GET /bookings/owner` `PATCH /bookings/<id>/status`
+- `POST /society_bulk_order`
+- `POST /create-payment-intent`
+
+**4. IoT Analytics Service** (`/analytics/*`) — Port 5006
+- `POST /log_reading`
+- `GET  /consumption_report` `GET /society_dashboard` `GET /conservation_summary`
+
+**5. Gamification Service** (`/gamification/*`) — Port 5005
+- `GET  /conservation_tips` `GET /challenges`
+- `POST /start_challenge/<id>` `GET /user_challenges` `PUT /update_challenge_progress/<id>`
+- `GET|POST /community/broadcasts`
+- `GET|POST /community/threads` `GET|POST /community/threads/<id>/comments`
+
+---
+
+## Key Design Decisions
+
+These decisions are deliberate and defensible. Each one involves a trade-off worth understanding.
+
+---
 
 ### Why microservices over a monolith?
 
-Transactional APIs require low latency, while Spark analytics are bursty and compute heavy. Splitting domains into services enables:
+The transactional API layer and the analytical batch layer have fundamentally opposing SLA requirements. The API must respond in milliseconds; Spark jobs process potentially millions of IoT records and run for minutes. A monolith would force them to share CPU, memory, and deployment lifecycle, risking latency spikes during batch runs.
 
-- independent deployment and scaling
-- bounded blast radius
-- domain ownership by capability (auth, supplier, booking, gamification, analytics)
+Splitting into five services also enforces **domain ownership by capability**: auth, supplier management, booking/payments, gamification, and IoT analytics are each independently deployable. A bug in the gamification service cannot take down the booking flow. The blast radius of any failure is bounded.
 
-### Why an Nginx API Gateway?
-
-The gateway provides a single ingress (`:5001`) and handles:
-
-- path-based routing to services
-- request correlation ID generation/propagation (`X-Correlation-ID`)
-- centralized edge behavior
-
-### Why separate databases per service?
-
-Each service owns its own schema/database (`auth_db`, `supplier_db`, `booking_db`, `gamification_db`, `iot_db`) to preserve autonomy and reduce coupling.  
-Cross-service data joins are done via **inter-service HTTP APIs**, not foreign keys.
-
-### Why Redis as shared infrastructure (not sidecar)?
-
-Redis now runs as an independent shared service in Compose (and should be a shared infra service in production), which allows:
-
-- independent scaling and lifecycle
-- cleaner resource isolation
-- shared caching across services when needed
-
-### Why ephemeral Spark?
-
-Spark runs in dedicated containers and can be scheduled/triggered independently. This keeps analytics compute separate from API compute and avoids 24/7 cluster cost.
+The trade-off is operational overhead — more containers, more network calls between services, and distributed tracing complexity. At current scale, this is manageable; the isolation benefit outweighs the cost.
 
 ---
 
-## High-Level Deployment Diagram
+### Why an Nginx API Gateway over direct service exposure?
 
-```text
-                                    +-----------------------+
-                                    |    User Browser       |
-                                    |  (Frontend / Vite)    |
-                                    +-----------+-----------+
-                                                |
-                                                v
-                                    +-----------------------+
-                                    |   Nginx API Gateway   |
-                                    |      (Port 5001)      |
-                                    +--+----+----+----+-----+
-                                       |    |    |    | 
-                                       |    |    |    +-------------------+
-                                       |    |    +------> iot_analytics   |
-                                       |    +-----------> gamification     |
-                                       +---------------> booking           |
-                                                      +-> supplier         |
-                                                      +-> auth             |
+The gateway provides a **single public ingress** on port 5001 and handles path-based routing to the correct microservice. This means the frontend only ever talks to one host, regardless of how many services exist behind it.
 
-     +------------------+      +-------------------+      +------------------------+
-     |  Redis (shared)  |<---->| Flask services    |<---->| PostgreSQL (5 DBs)     |
-     +------------------+      +-------------------+      +------------------------+
-                                                ^
-                                                |
-                                   +------------+------------+
-                                   | Spark Master + Worker   |
-                                   | Reads parquet, writes DB|
-                                   +------------+------------+
-                                                |
-                                      +---------+---------+
-                                      | data/raw parquet  |
-                                      +-------------------+
+Beyond routing, the gateway is the right place to add cross-cutting concerns: request correlation ID generation and propagation (`X-Correlation-ID`), rate limiting, SSL termination, and future authentication middleware — without modifying individual service code.
 
-              +---------------------+              +--------------------+
-              | Prometheus (+redis) | <----------  | Flask /metrics     |
-              +----------+----------+              +--------------------+
-                         |
-                         v
-                    +----+----+
-                    | Grafana |
-                    +---------+
-```
+The alternative (exposing five service ports directly) would leak internal topology to the frontend, complicate CORS configuration, and make future service restructuring a breaking change for clients.
 
 ---
 
-## Microservices & Route Mapping
+### Why a dedicated database per service?
 
-1. **Auth Service** (`/auth/*`)
-   - `GET /`
-   - `GET /ping`
-   - `POST /register`
-   - `POST /login`
-   - `GET|PUT /profile`
+Each service owns its own schema/database (`auth_db`, `supplier_db`, `booking_db`, `gamification_db`, `iot_db`). This is the foundational rule of microservice data ownership: no service reads another service's database directly.
 
-2. **Supplier Service** (`/supplier/*`)
-   - `GET /suppliers`
-   - `POST /tankers`
-   - `GET /tankers/owner`
-   - `PUT /tankers/<id>`
-   - `DELETE /tankers/<id>`
-   - `PATCH /tankers/<id>/status`
-   - `GET /owner/dashboard`
-   - `GET /owner/earnings`
+Cross-service data requirements are resolved via **inter-service HTTP APIs**. This enforces explicit contracts, allows each service to evolve its schema independently, and prevents tight coupling through shared table references.
 
-3. **Booking Service** (`/bookings/*`)
-   - `POST /book_tanker`
-   - `GET /track_order/<id>`
-   - `PUT /update_order/<id>`
-   - `POST /bookings`
-   - `GET /bookings/owner`
-   - `PATCH /bookings/<id>/status`
-   - `POST /society_bulk_order`
-   - `POST /create-payment-intent`
+The trade-off is that joins across service boundaries become HTTP calls — adding latency and failure surface. For the current workload, these cross-service calls are infrequent enough that this is not a problem. At higher scale, introducing an event bus (Kafka) for asynchronous data propagation would be the natural evolution.
 
-4. **IoT Analytics Service** (`/analytics/*`)
-   - `POST /log_reading`
-   - `GET /consumption_report`
-   - `GET /society_dashboard`
-   - `GET /conservation_summary`
+---
 
-5. **Gamification Service** (`/gamification/*`)
-   - `GET /conservation_tips`
-   - `GET /challenges`
-   - `POST /start_challenge/<id>`
-   - `GET /user_challenges`
-   - `PUT /update_challenge_progress/<id>`
-   - `GET|POST /community/broadcasts`
-   - `GET|POST /community/threads`
-   - `GET|POST /community/threads/<id>/comments`
+### Why Redis as a shared infrastructure service (not a sidecar)?
+
+In an earlier monolith iteration, Redis ran as a sidecar container inside the same ECS Task as the Flask API, communicating over `localhost`. This eliminated inter-container network latency on the session cache hot path.
+
+In the microservices architecture, a single Redis sidecar per service would create five isolated cache islands. Any cross-service session or shared data would require duplication or an extra HTTP call. Running Redis as a **shared infrastructure service** allows all five services to share session state, rate-limit counters, and hot query caches from a single well-managed instance.
+
+The latency trade-off (a network hop vs. localhost) is minimal at intra-Docker-network speeds (~0.1ms), and the operational simplicity gain is significant.
+
+---
+
+### Why AWS ECS Fargate for container hosting?
+
+Fargate was chosen over raw EC2 to eliminate instance provisioning and OS patching overhead, while retaining full container-level control. Lambda was ruled out because Spark jobs exceed Lambda's maximum execution duration and memory limits — Lambda is suited to stateless, sub-15-minute invocations.
+
+Fargate provides the right middle ground: serverless infrastructure management with support for long-running, memory-intensive containers.
+
+---
+
+### Why ephemeral Spark over a persistent cluster?
+
+Running a persistent Spark cluster 24/7 would be cost-prohibitive for batch workloads that only run three times a day. The right model is: spin up compute, process data, write results, terminate.
+
+AWS EventBridge triggers the Spark ECS Task on a cron schedule. The container reads from S3, aggregates IoT readings, writes aggregated output to `iot_db`, and exits. Infrastructure cost is strictly proportional to actual processing time. A future evolution would trigger Spark on S3 event notifications (new file arrivals) rather than a fixed schedule, eliminating the latency between data arrival and analysis.
+
+---
+
+### Why PostgreSQL (RDS) as the primary store?
+
+PostgreSQL offers ACID guarantees, strong ORM support via SQLAlchemy, and sufficient analytical query performance for current data volumes. The API services perform OLTP operations (point reads, small writes); the Spark job performs OLAP writes (bulk aggregated inserts).
+
+Both workloads targeting the same RDS instance avoids maintaining a separate analytics store and simplifies the data model. The trade-off is query isolation — a heavy analytical write could compete with transactional reads. For current scale this is acceptable. The clear evolution path is read replicas for the API tier, or a dedicated data warehouse (Redshift) for heavier analytics.
+
+---
+
+### Why JWT for authentication?
+
+JWT tokens are stateless — the server does not need to store session state to validate them. This means any instance of any service can validate a token without a database or session store lookup, which is essential for horizontal scaling. The trade-off is that token revocation requires a blocklist (or short expiry), which is an acceptable constraint for this use case.
 
 ---
 
 ## Tech Stack
 
-| Layer | Technology |
-|---|---|
-| Frontend | React + TypeScript + Vite |
-| API | Flask microservices |
-| Gateway | Nginx |
-| Auth | JWT |
-| Payments | Stripe |
-| Cache | Redis |
-| DB | PostgreSQL 13 (logical split DBs) |
-| Analytics | Apache Spark (PySpark) |
-| Monitoring | Prometheus + Grafana |
-| CI/CD | Jenkins + SonarQube + Pytest |
-| Containerization | Docker + Docker Compose |
+| Layer | Technology | Rationale |
+|---|---|---|
+| Frontend | React + TypeScript + Vite | Fast dev server, type safety, zero-config bundling |
+| API Gateway | Nginx | Path-based routing, single ingress, correlation ID injection |
+| Microservices | Python / Flask (×5) | Lightweight, fits team familiarity, independently deployable |
+| Auth | JWT (JSON Web Tokens) | Stateless — scales horizontally without session affinity |
+| Payments | Stripe API | PCI compliance out of the box, fractional currency handling |
+| Cache | Redis (shared infrastructure) | Sub-millisecond session and query caching across all services |
+| Primary DB | PostgreSQL 13 (5 logical DBs) | ACID compliance, strong ORM support via SQLAlchemy |
+| Batch Analytics | Apache Spark (PySpark) | Distributed processing for large IoT datasets |
+| Containerization | Docker + Docker Compose | Environment parity between local dev and cloud |
+| IaC | Terraform | Reproducible, version-controlled AWS infrastructure |
+| CI/CD | Jenkins + SonarQube + Pytest | Automated test, quality gate, and security scan pipeline |
+| Monitoring | Prometheus + Grafana | Real-time metrics and alerting across all services |
+
+---
+
+## Architectural Patterns Applied
+
+**API Gateway Pattern** — Nginx acts as the single public ingress point. All client traffic enters on port 5001 and is routed by path prefix to the correct microservice. This decouples the frontend from internal service topology and provides a centralized location for cross-cutting concerns.
+
+**Database per Service** — Each microservice owns its own PostgreSQL database. No service reads another's database directly. Cross-service data is accessed via explicit HTTP APIs, enforcing bounded context and preventing schema coupling.
+
+**Shared Infrastructure for Cross-Cutting Services** — Redis runs as an independent shared service rather than per-service sidecars. This allows all microservices to share session state and cache without data duplication, while still being independently scalable from the application tier.
+
+**Decoupled Compute** — The API services and the Spark analytics pipeline are entirely independent. A Spark job failure does not affect API availability. Neither workload can starve the other of CPU or memory.
+
+**Ephemeral Batch Processing** — Spark compute is provisioned only when needed. EventBridge triggers the ECS Task on a cron schedule; the container exits after completion. Infrastructure costs remain proportional to actual workload.
+
+**Correlation ID Propagation** — The Nginx gateway injects an `X-Correlation-ID` header on every inbound request, which services propagate to their own logs and to any inter-service HTTP calls. This enables end-to-end request tracing across service boundaries without a full distributed tracing system.
 
 ---
 
 ## Project Structure
 
-```bash
+```
 .
 ├── README.md
-├── docker-compose.yml
-├── docker-compose.cicd.yml
-├── prometheus.yml
+├── docker-compose.yml               # Full local dev environment
+├── docker-compose.cicd.yml          # Jenkins + SonarQube CI/CD stack
+├── prometheus.yml                   # Prometheus scrape config
+│
+├── backend/
+│   ├── api_gateway/
+│   │   └── nginx.conf               # Path routing, correlation ID, upstream config
+│   ├── auth_service/                # JWT auth, user registration, profile
+│   ├── supplier_service/            # Tanker management, owner dashboard
+│   ├── booking_service/             # Order lifecycle, Stripe payment intents
+│   ├── gamification_service/        # Challenges, community broadcasts, threads
+│   ├── iot_analytics_service/       # IoT reading ingestion, consumption reports
+│   ├── db_init/
+│   │   └── 01-create-databases.sql  # Creates 5 logical databases on first boot
+│   ├── populate_db.py               # Seed script: users, societies, tankers, challenges
+│   ├── Jenkinsfile                  # CI/CD pipeline definition
+│   ├── sonar-project.properties     # SonarQube project config
+│   └── tests/
+│       ├── conftest.py
+│       └── test_business_logic.py
+│
 ├── analytics/
 │   ├── Dockerfile
-│   ├── process_data.py
+│   ├── process_data.py              # PySpark: read parquet, aggregate, write to iot_db
 │   └── requirements.txt
-├── backend/
-│   ├── api_gateway/nginx.conf
-│   ├── auth_service/
-│   ├── supplier_service/
-│   ├── booking_service/
-│   ├── gamification_service/
-│   ├── iot_analytics_service/
-│   ├── db_init/01-create-databases.sql
-│   ├── populate_db.py
-│   ├── Jenkinsfile
-│   ├── sonar-project.properties
-│   └── tests/
+│
+├── frontend/                        # React + Vite client
+│
 ├── grafana/
-│   ├── dashboards/
-│   └── provisioning/
-├── data/
+│   ├── dashboards/                  # Pre-built dashboard JSON
+│   └── provisioning/                # Auto-provisioned datasources
+│
+├── data/                            # Shared volume: raw IoT parquet files
 └── spark_libs/
+    └── postgresql-42.7.8.jar        # JDBC driver for Spark → PostgreSQL writes
 ```
 
 ---
@@ -202,21 +320,21 @@ Spark runs in dedicated containers and can be scheduled/triggered independently.
 
 ### Prerequisites
 
-- Docker + Docker Compose
+- Docker + Docker Compose (daemon must be running)
 - Python 3.11+
 - Node.js 18+
-- PowerShell 7+
+- PowerShell 7+ (Windows) or Bash (Mac/Linux)
 
 ---
 
 ### Step 1: Clone & Configure
 
-```powershell
+```bash
 git clone <your-repo-url>
 cd <your-repo-folder>
 ```
 
-Create/Update `backend/.env`:
+Create `backend/.env`:
 
 ```env
 SECRET_KEY=change-me
@@ -225,7 +343,7 @@ STRIPE_SECRET_KEY=sk_test_your_stripe_test_key
 INTERNAL_SERVICE_TOKEN=internal-dev-token
 ```
 
-Create/Update `frontend/.env`:
+Create `frontend/.env`:
 
 ```env
 VITE_API_BASE_URL=http://localhost:5001
@@ -234,101 +352,111 @@ VITE_STRIPE_PUBLISHABLE_KEY=pk_test_your_key
 
 ---
 
-### Step 2: Start all backend services
+### Step 2: Start All Backend Services
 
-If you have old monolith data, run a full reset once:
+If you have data from an older monolith version, do a full reset first:
 
-```powershell
+```bash
 docker compose down -v
 ```
 
-Then start:
+Then build and start:
 
-```powershell
+```bash
 docker compose up -d --build
-docker ps
+docker ps    # verify all containers are healthy
 ```
+
+This starts: PostgreSQL (with 5 logical DBs), Redis, all 5 Flask microservices, Nginx gateway, Spark Master + Worker, Prometheus, and Grafana.
 
 ---
 
-### Step 3: Seed the databases (**inside Docker**)
+### Step 3: Seed the Databases
 
-The old command is no longer valid because `water_mgmt_backend` (monolith container) does not exist anymore.
+> ⚠️ The old `docker exec -it water_mgmt_backend python populate_db.py` command no longer works — the monolith container does not exist. Use the dedicated seeder instead.
 
-Use:
+First run (or after code changes):
 
-```powershell
-docker compose --profile tools run --rm db_seeder
-Use this once after code changes to ensure the seeder image is refreshed:
+```bash
 docker compose --profile tools run --rm --build db_seeder
-Then normal reruns:
+```
+
+Subsequent runs:
+
+```bash
 docker compose --profile tools run --rm db_seeder
 ```
 
-This runs `backend/populate_db.py` inside a dedicated seeder container and populates:
-
-- `auth_db`
-- `supplier_db`
-- `booking_db`
-- `gamification_db`
-- `iot_db`
+This runs `backend/populate_db.py` inside an isolated seeder container and populates all five databases: `auth_db`, `supplier_db`, `booking_db`, `gamification_db`, and `iot_db`.
 
 ---
 
-### Step 4: Trigger Spark analytics run (**inside Docker**)
+### Step 4: Trigger Spark Analytics Run
 
-Use:
+```bash
+# Linux / Mac
+docker exec -it spark_master /opt/spark/bin/spark-submit \
+  --master spark://spark-master:7077 \
+  --jars /opt/spark/jars_external/postgresql-42.7.8.jar \
+  /opt/analytics/process_data.py
 
-```powershell
+# Windows PowerShell
 docker exec -it spark_master /opt/spark/bin/spark-submit `
   --master spark://spark-master:7077 `
   --jars /opt/spark/jars_external/postgresql-42.7.8.jar `
   /opt/analytics/process_data.py
 ```
 
-This reads parquet under `/opt/analytics/data/raw/water_readings` and writes aggregated outputs to `iot_db`.
+This simulates the EventBridge-triggered batch job. Reads Parquet files from `data/raw/water_readings`, aggregates IoT metrics, and writes results to `iot_db`.
 
 ---
 
-### Step 5: Start frontend
+### Step 5: Start the Frontend
 
-```powershell
+```bash
 cd frontend
 npm install
 npm run dev
 ```
 
+Frontend runs at `http://localhost:5173` by default and proxies API calls to the Nginx gateway at `http://localhost:5001`.
+
 ---
 
-### Step 6: Access services
+### Step 6: Access Services
 
 | Service | URL | Notes |
 |---|---|---|
-| API Gateway | `http://localhost:5001` | all backend APIs |
-| Prometheus | `http://localhost:9090` | metrics |
-| Grafana | `http://localhost:3000` | `admin/admin` |
-| Spark UI | `http://localhost:8080` | master UI |
-| Jenkins | `http://localhost:8081` | from cicd compose |
-| SonarQube | `http://localhost:9000` | from cicd compose |
+| API Gateway | `http://localhost:5001` | All backend API routes |
+| Prometheus | `http://localhost:9090` | Metrics scraping |
+| Grafana | `http://localhost:3000` | Login: `admin` / `admin` |
+| Spark UI | `http://localhost:8080` | Master dashboard |
 
 ---
 
-### Step 7: Grafana quick guide (smart/default path)
+### Step 7: Grafana Quick Guide
 
-Grafana is pre-provisioned from files under `grafana/provisioning` and `grafana/dashboards`:
+Grafana is **pre-provisioned** from `grafana/provisioning` and `grafana/dashboards` — no manual datasource setup required on first boot.
 
-- datasource: Prometheus (`http://prometheus:9090`)
-- default dashboard: **Water Platform - Microservices Overview**
+- Datasource: Prometheus at `http://prometheus:9090` (auto-configured)
+- Default dashboard: **Water Platform — Microservices Overview** (auto-loaded)
 
-So you do **not** need to manually create datasources/panels each time.
-
-If you want custom panels, these PromQL queries are good defaults:
+For custom panels, useful PromQL queries:
 
 ```promql
+# Request rate per service
 sum by (job) (rate(flask_http_request_total[5m]))
+
+# 95th percentile latency per service
 histogram_quantile(0.95, sum by (le, job) (rate(flask_http_request_duration_seconds_bucket[5m])))
+
+# Error rate per service
 sum by (job) (rate(flask_http_request_exceptions_total[5m]))
+
+# Total requests in last hour
 sum(increase(flask_http_request_total[1h]))
+
+# Redis memory and connections
 redis_memory_used_bytes
 redis_connected_clients
 rate(redis_commands_processed_total[5m])
@@ -336,83 +464,185 @@ rate(redis_commands_processed_total[5m])
 
 ---
 
-### Step 8: Tests and quality checks
+### Step 8: Tests & Quality Checks
 
-Backend:
+**Backend:**
 
-```powershell
+```bash
 python -m pip install pytest
-python -m pytest backend\tests -q
-python -m compileall backend\auth_service backend\supplier_service backend\booking_service backend\gamification_service backend\iot_analytics_service
+python -m pytest backend/tests -q
+
+# Compile all 5 service packages (catches import errors)
+python -m compileall backend/auth_service \
+  backend/supplier_service \
+  backend/booking_service \
+  backend/gamification_service \
+  backend/iot_analytics_service
 ```
 
-Frontend:
+**Frontend:**
 
-```powershell
+```bash
 cd frontend
-npx tsc -p tsconfig.app.json --noEmit
-npm run build
+npx tsc -p tsconfig.app.json --noEmit    # type-check
+npm run build                             # production build check
+```
+
+**Linting & Security (backend):**
+
+```bash
+cd backend
+pip install flake8 bandit pytest-cov
+flake8 .                                                   # style and lint
+bandit -r .                                                # security scan
+pytest tests/ -v --cov=. --cov-report=xml                 # generates coverage.xml for SonarQube
 ```
 
 ---
 
-## CI/CD Pipeline (Jenkins + SonarQube)
+## CI/CD Pipeline — Jenkins + SonarQube
 
-Yes, the CI/CD flow remains conceptually the same, but the pipeline is updated for microservices:
+The project ships with a fully containerized local CI/CD environment. On push, Jenkins uses `backend/Jenkinsfile` to: install dependencies per service, compile all 5 service packages, run the Pytest suite, and submit a `coverage.xml` report to SonarQube for quality gate evaluation.
 
-- installs dependencies per backend service
-- compiles all 5 service packages
-- runs `backend/tests`
-- publishes `coverage.xml` to SonarQube
+---
 
-### 1) Start CI/CD stack
+### 1. Start the CI/CD Stack
 
-```powershell
+```bash
 docker compose -f docker-compose.cicd.yml up -d
 ```
 
-### 2) Unlock Jenkins (first run only)
+| Service | URL |
+|---|---|
+| Jenkins | `http://localhost:8081` |
+| SonarQube | `http://localhost:9000` |
 
-```powershell
+---
+
+### 2. Install Required Jenkins Plugins
+
+On first boot, navigate to **Jenkins → Manage Jenkins → Plugins** and install:
+
+- **Pipeline**
+- **Git**
+- **Docker Pipeline**
+- **SonarQube Scanner**
+- **Credentials Binding**
+
+Unlock Jenkins on first run using the initial admin password:
+
+```bash
 docker exec -it water_cicd_jenkins cat /var/jenkins_home/secrets/initialAdminPassword
 ```
 
-### 3) Open dashboards
+---
 
-- Jenkins: `http://localhost:8081`
-- SonarQube: `http://localhost:9000` (default usually `admin/admin`)
+### 3. Connect Jenkins to SonarQube
 
-### 4) Jenkins job setup
+**In SonarQube** (`http://localhost:9000`):
 
-1. Create a Pipeline job pointing to this repository.
-2. Use repository `backend/Jenkinsfile`.
-3. Configure SonarQube server in Jenkins as `SonarQube`.
-4. Ensure `SonarQubeScanner` tool is installed in Jenkins global tools.
+1. Log in (`admin` / `admin`).
+2. Go to **My Account → Security → Generate Token**.
+3. Copy the generated token.
+
+**In Jenkins** (`http://localhost:8081`):
+
+1. Go to **Manage Jenkins → Credentials → System → Global → Add Credentials**.
+   - Kind: **Secret text**
+   - Secret: *(paste Sonar token)*
+   - ID: `sonar-token`
+2. Go to **Manage Jenkins → System → SonarQube Servers → Add SonarQube**.
+   - Name: `SonarQube`
+   - Server URL: `http://host.docker.internal:9000`
+   - Server authentication token: `sonar-token`
+
+> `host.docker.internal` resolves to the Docker host from inside a container, bridging Jenkins to the SonarQube container on your machine.
+
+---
+
+### 4. Configure SonarQube Scanner Tool
+
+Go to **Manage Jenkins → Tools → SonarQube Scanner installations → Add**:
+
+- Name: `SonarQubeScanner`
+- ✅ Install automatically — latest version
+
+---
+
+### 5. Create the Pipeline Job
+
+1. **New Item → Pipeline**
+2. Name: `water-platform-ci`
+3. Under **Pipeline**:
+   - Definition: **Pipeline script from SCM**
+   - SCM: **Git**
+   - Repository URL: *(your repo URL)*
+   - Branch specifier: `*/main` (or your branch)
+   - Script Path: `backend/Jenkinsfile`
+4. **Save**
+
+**Optional deploy stage:** To add deployment after tests pass, append a final stage to your `Jenkinsfile`:
+
+```groovy
+stage('Deploy') {
+    steps {
+        sh 'docker compose up -d --build'
+        sh 'docker compose --profile tools run --rm db_seeder'
+    }
+}
+```
+
+---
+
+### 6. Run the Pipeline
+
+- Open the `water-platform-ci` job.
+- Click **Build Now**.
+- Open **Console Output** and verify:
+  - All 5 service packages compile cleanly
+  - Backend tests pass
+  - Frontend TypeScript build passes
+  - `sonar-scanner` executes and submits results
+
+---
+
+### 7. Verify SonarQube Results
+
+In SonarQube (`http://localhost:9000`), open the `water-conservation-app` project and confirm:
+
+- Latest analysis timestamp is updated
+- Code smells, bugs, and vulnerability counts are visible
+- Quality gate status is shown (pass/fail)
 
 ---
 
 ## Teardown
 
-```powershell
+```bash
+# Stop and remove containers (keep volumes)
 docker compose down
+
+# Full reset — wipe all data volumes
 docker compose down -v
+
+# Shut down CI/CD environment
 docker compose -f docker-compose.cicd.yml down -v
 ```
 
 ---
 
-## Seeded test credentials
+## Test Credentials
 
-**User**
+**Resident User**
 
-```text
-john_1
-pass123
+```
+Username: john_1
+Password: pass123
 ```
 
-**Tanker owner**
+**Tanker Owner**
 
-```text
-owner_raj
-owner123
+```
+Username: owner_raj
+Password: owner123
 ```
