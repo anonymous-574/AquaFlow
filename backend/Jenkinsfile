@@ -31,25 +31,28 @@ pipeline {
         stage('Run Backend Tests') {
             steps {
                 sh '''
-                pip3 install -r backend/auth_service/requirements.txt
-                pip3 install -r backend/supplier_service/requirements.txt
-                pip3 install -r backend/booking_service/requirements.txt
-                pip3 install -r backend/gamification_service/requirements.txt
-                pip3 install -r backend/iot_analytics_service/requirements.txt
-                pip3 install pandas pyarrow
-                pip3 install pytest pytest-cov
+                python3 -m venv .venv
+                . .venv/bin/activate
+
+                pip install -r backend/auth_service/requirements.txt
+                pip install -r backend/supplier_service/requirements.txt
+                pip install -r backend/booking_service/requirements.txt
+                pip install -r backend/gamification_service/requirements.txt
+                pip install -r backend/iot_analytics_service/requirements.txt
+                pip install pandas pyarrow
+                pip install pytest pytest-cov
                 
                 export FLASK_ENV=testing
                 export PYTHONPATH=./backend
 
-                python3 -m compileall \
+                python -m compileall \
                   backend/auth_service \
                   backend/supplier_service \
                   backend/booking_service \
                   backend/gamification_service \
                   backend/iot_analytics_service
                 
-                python3 -m pytest backend/tests/ --cov=backend/ --cov-report=xml
+                python -m pytest backend/tests/ --cov=backend/ --cov-report=xml
                 '''
             }
         }
