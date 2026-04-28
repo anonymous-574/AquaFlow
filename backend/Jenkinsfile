@@ -1,50 +1,60 @@
 pipeline {
-    // 1. Run the overall pipeline on the Jenkins server itself
-    agent any 
+    agent any
 
     environment {
         SCANNER_HOME = tool 'SonarQubeScanner'
+        DEBIAN_FRONTEND = 'noninteractive'
     }
 
     stages {
-        stage('Run Backend Tests') {
-            agent {
-                docker { 
-                    image 'python:3.10-slim' 
-                    args '-u root'
-                }
-            }
+        stage('Prepare Build Tools') {
             steps {
                 sh '''
-                pip install -r backend/auth_service/requirements.txt
-                pip install -r backend/supplier_service/requirements.txt
-                pip install -r backend/booking_service/requirements.txt
-                pip install -r backend/gamification_service/requirements.txt
-                pip install -r backend/iot_analytics_service/requirements.txt
-                pip install pandas pyarrow
-                pip install pytest pytest-cov
+                if ! command -v python3 >/dev/null 2>&1; then
+                  apt-get update
+                  apt-get install -y python3 python3-pip python3-venv
+                fi
+
+                if ! command -v node >/dev/null 2>&1; then
+                  apt-get update
+                  apt-get install -y nodejs npm
+                fi
+
+                python3 --version
+                pip3 --version
+                node --version
+                npm --version
+                '''
+            }
+        }
+
+        stage('Run Backend Tests') {
+            steps {
+                sh '''
+                pip3 install -r backend/auth_service/requirements.txt
+                pip3 install -r backend/supplier_service/requirements.txt
+                pip3 install -r backend/booking_service/requirements.txt
+                pip3 install -r backend/gamification_service/requirements.txt
+                pip3 install -r backend/iot_analytics_service/requirements.txt
+                pip3 install pandas pyarrow
+                pip3 install pytest pytest-cov
                 
                 export FLASK_ENV=testing
                 export PYTHONPATH=./backend
 
-                python -m compileall \
+                python3 -m compileall \
                   backend/auth_service \
                   backend/supplier_service \
                   backend/booking_service \
                   backend/gamification_service \
                   backend/iot_analytics_service
                 
-                pytest backend/tests/ --cov=backend/ --cov-report=xml
+                python3 -m pytest backend/tests/ --cov=backend/ --cov-report=xml
                 '''
             }
         }
 
         stage('Build Frontend') {
-            agent {
-                docker {
-                    image 'node:20-alpine'
-                }
-            }
             steps {
                 sh '''
                 cd frontend
