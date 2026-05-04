@@ -73,7 +73,7 @@ resource "aws_ecs_task_definition" "backend" {
   container_definitions = jsonencode([
     {
       name      = each.key
-      image     = "${aws_ecr_repository.repos[each.value.repository_name].repository_url}:${var.image_tag}"
+      image     = "${data.aws_ecr_repository.repos[each.value.repository_name].repository_url}:${var.image_tag}"
       essential = true
       portMappings = [
         {
@@ -171,7 +171,7 @@ resource "aws_ecs_task_definition" "api_gateway" {
   container_definitions = jsonencode([
     {
       name      = "api_gateway"
-      image     = "${aws_ecr_repository.repos["api_gateway"].repository_url}:${var.image_tag}"
+      image     = "${data.aws_ecr_repository.repos["api_gateway"].repository_url}:${var.image_tag}"
       essential = true
       portMappings = [
         {
@@ -259,7 +259,7 @@ resource "aws_ecs_task_definition" "frontend" {
   container_definitions = jsonencode([
     {
       name      = "frontend"
-      image     = "${aws_ecr_repository.repos["frontend"].repository_url}:${var.image_tag}"
+      image     = "${data.aws_ecr_repository.repos["frontend"].repository_url}:${var.image_tag}"
       essential = true
       portMappings = [
         {
@@ -296,7 +296,7 @@ resource "aws_ecs_task_definition" "db_seeder" {
   container_definitions = jsonencode([
     {
       name      = "db_seeder"
-      image     = "${aws_ecr_repository.repos["db_seeder"].repository_url}:${var.image_tag}"
+      image     = "${data.aws_ecr_repository.repos["db_seeder"].repository_url}:${var.image_tag}"
       essential = true
       command   = ["python", "populate_db.py"]
       environment = [

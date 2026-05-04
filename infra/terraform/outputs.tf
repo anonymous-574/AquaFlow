@@ -21,7 +21,7 @@ output "redis_endpoint" {
 output "ecr_repository_urls" {
   description = "ECR repository URLs for all app images."
   value = {
-    for name, repo in aws_ecr_repository.repos :
+    for name, repo in data.aws_ecr_repository.repos :
     name => repo.repository_url
   }
 }

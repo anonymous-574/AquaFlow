@@ -10,7 +10,7 @@ resource "aws_ecs_task_definition" "spark" {
   container_definitions = jsonencode([
     {
       name      = "spark_job"
-      image     = "${aws_ecr_repository.repos["spark_job"].repository_url}:${var.image_tag}"
+      image     = "${data.aws_ecr_repository.repos["spark_job"].repository_url}:${var.image_tag}"
       essential = true
       environment = [
         {
