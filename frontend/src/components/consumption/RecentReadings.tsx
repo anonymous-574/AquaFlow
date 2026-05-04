@@ -30,8 +30,7 @@ export function RecentReadings() {
   useEffect(() => {
     const fetchReadings = async () => {
       try {
-        // Use any here temporarily to bypass strict typing for the quick fix
-        const response = await apiRequest<any>('/consumption_report?period=weekly&detailed=true', {
+        const response = await apiRequest<any>('/analytics/consumption_report?period=weekly&detailed=true', {
           method: 'GET'
         });
         
