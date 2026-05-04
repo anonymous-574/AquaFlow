@@ -1,0 +1,17 @@
+aws_region             = "ap-south-1"
+project_name           = "aquaflow"
+environment            = "hackathon"
+admin_cidr             = "0.0.0.0/0"
+
+db_username            = "appuser"
+db_password            = "REPLACE_ME"
+
+jwt_secret_key         = "REPLACE_ME_MIN_32_CHARS"
+internal_service_token = "REPLACE_ME_INTERNAL_TOKEN"
+stripe_secret_key      = "REPLACE_ME_STRIPE_SECRET"
+
+grafana_admin_password = "REPLACE_ME_GRAFANA_PASSWORD"
+sonarqube_db_password  = "REPLACE_ME_SONAR_DB_PASSWORD"
+
+# Change to cron(0 0 * * ? *) for midnight UTC runs.
+spark_schedule_expression = "cron(0 */12 * * ? *)"

@@ -2,3 +2,12 @@ data/
 important.txt
 jenkins_sonar_instr.txt
 super_prompt.txt
+.pytest_cache/
+__pycache__/
+prompt2.txt
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfplan
+crash.log

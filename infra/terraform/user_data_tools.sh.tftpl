@@ -1,0 +1,215 @@
+#!/bin/bash
+set -euxo pipefail
+
+dnf update -y
+dnf install -y docker git jq postgresql15
+systemctl enable --now docker
+usermod -aG docker ec2-user || true
+
+mkdir -p /opt/aquaflow/tools/grafana/provisioning/datasources
+mkdir -p /opt/aquaflow/tools/grafana/provisioning/dashboards
+mkdir -p /opt/aquaflow/tools/grafana/dashboards
+
+cat >/opt/aquaflow/tools/.env <<'EOF'
+ALB_DNS=${albdns}
+GRAFANA_ADMIN_PASSWORD=${grafana_password}
+SONAR_DB_PASSWORD=${sonarqube_db_password}
+PROMETHEUS_API_PREFIX=/api
+EOF
+
+cat >/opt/aquaflow/tools/docker-compose.yml <<'EOF'
+services:
+  sonarqube_db:
+    image: postgres:15-alpine
+    container_name: aquaflow_sonarqube_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sonar
+      POSTGRES_PASSWORD: $${SONAR_DB_PASSWORD}
+      POSTGRES_DB: sonarqube
+    volumes:
+      - sonarqube_db_data:/var/lib/postgresql/data
+
+  sonarqube:
+    image: sonarqube:26.3.0.120487-community
+    container_name: aquaflow_sonarqube
+    restart: unless-stopped
+    depends_on:
+      - sonarqube_db
+    ports:
+      - "9000:9000"
+    environment:
+      SONAR_JDBC_URL: jdbc:postgresql://sonarqube_db:5432/sonarqube
+      SONAR_JDBC_USERNAME: sonar
+      SONAR_JDBC_PASSWORD: $${SONAR_DB_PASSWORD}
+    volumes:
+      - sonarqube_data:/opt/sonarqube/data
+      - sonarqube_logs:/opt/sonarqube/logs
+      - sonarqube_extensions:/opt/sonarqube/extensions
+
+  jenkins:
+    image: jenkins/jenkins:lts-jdk17
+    container_name: aquaflow_jenkins
+    restart: unless-stopped
+    user: root
+    depends_on:
+      - sonarqube
+    ports:
+      - "8080:8080"
+      - "50000:50000"
+    environment:
+      JAVA_OPTS: -Djenkins.install.runSetupWizard=false
+    volumes:
+      - jenkins_data:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  prometheus:
+    image: prom/prometheus:v2.53.3
+    container_name: aquaflow_prometheus
+    restart: unless-stopped
+    depends_on:
+      - jenkins
+    ports:
+      - "9090:9090"
+    environment:
+      PROMETHEUS_SCRAPE_HOST: $${ALB_DNS}
+      PROMETHEUS_API_PREFIX: $${PROMETHEUS_API_PREFIX}
+    volumes:
+      - ./prometheus.template.yml:/etc/prometheus/prometheus.template.yml:ro
+      - prometheus_data:/prometheus
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      API_PREFIX="$$$${PROMETHEUS_API_PREFIX:-}" &&
+      sed -e "s#__SCRAPE_HOST__#$$$${PROMETHEUS_SCRAPE_HOST}#g" -e "s#__API_PREFIX__#$$$${API_PREFIX}#g"
+      /etc/prometheus/prometheus.template.yml > /etc/prometheus/prometheus.yml &&
+      /bin/prometheus
+      --config.file=/etc/prometheus/prometheus.yml
+      --storage.tsdb.path=/prometheus
+      --web.enable-lifecycle
+
+  grafana:
+    image: grafana/grafana:11.3.1
+    container_name: aquaflow_grafana
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: $${GRAFANA_ADMIN_PASSWORD}
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/microservices-overview.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+
+volumes:
+  sonarqube_db_data:
+  sonarqube_data:
+  sonarqube_logs:
+  sonarqube_extensions:
+  jenkins_data:
+  prometheus_data:
+  grafana_data:
+EOF
+
+cat >/opt/aquaflow/tools/prometheus.template.yml <<'EOF'
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: auth_service
+    metrics_path: "__API_PREFIX__/auth/metrics"
+    static_configs:
+      - targets: ["__SCRAPE_HOST__"]
+  - job_name: supplier_service
+    metrics_path: "__API_PREFIX__/supplier/metrics"
+    static_configs:
+      - targets: ["__SCRAPE_HOST__"]
+  - job_name: booking_service
+    metrics_path: "__API_PREFIX__/bookings/metrics"
+    static_configs:
+      - targets: ["__SCRAPE_HOST__"]
+  - job_name: gamification_service
+    metrics_path: "__API_PREFIX__/gamification/metrics"
+    static_configs:
+      - targets: ["__SCRAPE_HOST__"]
+  - job_name: iot_analytics_service
+    metrics_path: "__API_PREFIX__/analytics/metrics"
+    static_configs:
+      - targets: ["__SCRAPE_HOST__"]
+EOF
+
+cat >/opt/aquaflow/tools/grafana/provisioning/datasources/prometheus.yml <<'EOF'
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+EOF
+
+cat >/opt/aquaflow/tools/grafana/provisioning/dashboards/dashboards.yml <<'EOF'
+apiVersion: 1
+providers:
+  - name: "AquaFlow Dashboards"
+    orgId: 1
+    folder: "AquaFlow"
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 60
+    options:
+      path: /var/lib/grafana/dashboards
+EOF
+
+cat >/opt/aquaflow/tools/grafana/dashboards/microservices-overview.json <<'EOF'
+{
+  "id": null,
+  "uid": "aquaflow-overview",
+  "title": "AquaFlow - API Metrics",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "HTTP Request Rate by Service",
+      "targets": [
+        {
+          "expr": "sum by (job) (rate(flask_http_request_total[5m]))",
+          "legendFormat": "{{job}}"
+        }
+      ],
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      }
+    }
+  ]
+}
+EOF
+
+cd /opt/aquaflow/tools
+docker compose --env-file .env up -d
+
+export PGPASSWORD='${db_password}'
+for attempt in $(seq 1 30); do
+  if psql -h '${db_host}' -U '${db_user}' -d postgres -c "SELECT 1;" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 10
+done
+
+for db in auth_db supplier_db booking_db gamification_db iot_db; do
+  exists=$(psql -h '${db_host}' -U '${db_user}' -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$${db}'")
+  if [ "$exists" != "1" ]; then
+    psql -h '${db_host}' -U '${db_user}' -d postgres -c "CREATE DATABASE $${db};"
+  fi
+done

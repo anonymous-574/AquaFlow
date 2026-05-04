@@ -147,9 +147,15 @@ services:
       - water_network
 
   api_gateway:
-    image: nginx:alpine
+    build: ./backend/api_gateway
     container_name: water_api_gateway
     restart: always
+    environment:
+      - AUTH_SERVICE_HOST=auth_service
+      - SUPPLIER_SERVICE_HOST=supplier_service
+      - BOOKING_SERVICE_HOST=booking_service
+      - GAMIFICATION_SERVICE_HOST=gamification_service
+      - IOT_ANALYTICS_SERVICE_HOST=iot_analytics_service
     depends_on:
       - auth_service
       - supplier_service
@@ -158,8 +164,21 @@ services:
       - iot_analytics_service
     ports:
       - "5001:80"
-    volumes:
-      - ./backend/api_gateway/nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - water_network
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: http://localhost:5001
+        VITE_STRIPE_PUBLISHABLE_KEY: ${VITE_STRIPE_PUBLISHABLE_KEY:-pk_test_change_me}
+    container_name: water_mgmt_frontend
+    restart: always
+    depends_on:
+      - api_gateway
+    ports:
+      - "5173:80"
     networks:
       - water_network
 

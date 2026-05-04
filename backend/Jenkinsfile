@@ -1,6 +1,21 @@
 pipeline {
     agent any
 
+    options {
+        timestamps()
+    }
+
+    parameters {
+        booleanParam(name: 'BUILD_AND_PUSH_IMAGES', defaultValue: false, description: 'Build app images and push to ECR')
+        booleanParam(name: 'DEPLOY_INFRA', defaultValue: false, description: 'Run Terraform apply/destroy from infra/terraform')
+        booleanParam(name: 'RUN_POST_DEPLOY_JOBS', defaultValue: true, description: 'After terraform apply, run DB seeder once and trigger Spark once')
+        choice(name: 'TF_ACTION', choices: ['apply', 'destroy'], description: 'Terraform action when DEPLOY_INFRA=true')
+        string(name: 'AWS_REGION', defaultValue: 'ap-south-1', description: 'AWS region for ECR/Terraform')
+        string(name: 'ECR_REGISTRY', defaultValue: '', description: 'ECR registry, e.g. 123456789012.dkr.ecr.ap-south-1.amazonaws.com')
+        string(name: 'TF_WORKING_DIR', defaultValue: 'infra/terraform', description: 'Terraform root directory')
+        string(name: 'TERRAFORM_EXTRA_ARGS', defaultValue: '', description: 'Extra terraform args (e.g. -var-file=terraform.tfvars)')
+    }
+
     environment {
         SCANNER_HOME = tool 'SonarQubeScanner'
         DEBIAN_FRONTEND = 'noninteractive'
@@ -10,20 +25,28 @@ pipeline {
         stage('Prepare Build Tools') {
             steps {
                 sh '''
-                if ! command -v python3 >/dev/null 2>&1; then
-                  apt-get update
-                  apt-get install -y python3 python3-pip python3-venv
-                fi
+                apt-get update
+                apt-get install -y --no-install-recommends \
+                    python3 python3-pip python3-venv \
+                    nodejs npm \
+                    docker.io \
+                    awscli \
+                    unzip \
+                    curl \
+                    jq
 
-                if ! command -v node >/dev/null 2>&1; then
-                  apt-get update
-                  apt-get install -y nodejs npm
+                if ! command -v terraform >/dev/null 2>&1; then
+                  curl -fsSL https://releases.hashicorp.com/terraform/1.9.8/terraform_1.9.8_linux_amd64.zip -o /tmp/terraform.zip
+                  unzip -o /tmp/terraform.zip -d /usr/local/bin
                 fi
 
                 python3 --version
-                pip3 --version
                 node --version
                 npm --version
+                aws --version
+                terraform version
+                docker --version
+                jq --version
                 '''
             }
         }
@@ -41,7 +64,7 @@ pipeline {
                 pip install -r backend/iot_analytics_service/requirements.txt
                 pip install pandas pyarrow
                 pip install pytest pytest-cov
-                
+
                 export FLASK_ENV=testing
                 export PYTHONPATH=./backend
 
@@ -51,7 +74,7 @@ pipeline {
                   backend/booking_service \
                   backend/gamification_service \
                   backend/iot_analytics_service
-                
+
                 python -m pytest backend/tests/ --cov=backend/ --cov-report=xml
                 '''
             }
@@ -60,9 +83,8 @@ pipeline {
         stage('Build Frontend') {
             steps {
                 sh '''
-                cd frontend
-                npm ci
-                npm run build
+                npm --prefix frontend ci
+                npm --prefix frontend run build
                 '''
             }
         }
@@ -76,10 +98,134 @@ pipeline {
                       -Dsonar.sources=. \
                       -Dsonar.python.coverage.reportPaths=coverage.xml \
                       -Dsonar.javascript.lcov.reportPaths=frontend/coverage/lcov.info \
-                      -Dsonar.typescript.lcov.reportPaths=frontend/coverage/lcov.info \
-                      -Dsonar.host.url=http://sonarqube:9000
+                      -Dsonar.typescript.lcov.reportPaths=frontend/coverage/lcov.info
                     '''
                 }
+            }
+        }
+
+        stage('Build Docker Images') {
+            when {
+                expression { return params.BUILD_AND_PUSH_IMAGES }
+            }
+            steps {
+                sh '''
+                if [ -z "$ECR_REGISTRY" ]; then
+                  echo "ECR_REGISTRY is required when BUILD_AND_PUSH_IMAGES=true"
+                  exit 1
+                fi
+
+                docker build -t "$ECR_REGISTRY/frontend:latest" ./frontend
+                docker build -t "$ECR_REGISTRY/api_gateway:latest" ./backend/api_gateway
+                docker build -t "$ECR_REGISTRY/db_seeder:latest" ./backend
+                docker build -t "$ECR_REGISTRY/auth_service:latest" ./backend/auth_service
+                docker build -t "$ECR_REGISTRY/supplier_service:latest" ./backend/supplier_service
+                docker build -t "$ECR_REGISTRY/booking_service:latest" ./backend/booking_service
+                docker build -t "$ECR_REGISTRY/gamification_service:latest" ./backend/gamification_service
+                docker build -t "$ECR_REGISTRY/iot_analytics_service:latest" ./backend/iot_analytics_service
+                docker build -t "$ECR_REGISTRY/spark_job:latest" ./analytics
+                '''
+            }
+        }
+
+        stage('Push Docker Images to ECR') {
+            when {
+                expression { return params.BUILD_AND_PUSH_IMAGES }
+            }
+            steps {
+                sh '''
+                aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY"
+
+                docker push "$ECR_REGISTRY/frontend:latest"
+                docker push "$ECR_REGISTRY/api_gateway:latest"
+                docker push "$ECR_REGISTRY/db_seeder:latest"
+                docker push "$ECR_REGISTRY/auth_service:latest"
+                docker push "$ECR_REGISTRY/supplier_service:latest"
+                docker push "$ECR_REGISTRY/booking_service:latest"
+                docker push "$ECR_REGISTRY/gamification_service:latest"
+                docker push "$ECR_REGISTRY/iot_analytics_service:latest"
+                docker push "$ECR_REGISTRY/spark_job:latest"
+                '''
+            }
+        }
+
+        stage('Terraform Deploy') {
+            when {
+                expression { return params.DEPLOY_INFRA }
+            }
+            steps {
+                sh '''
+                aws sts get-caller-identity
+
+                cd "$TF_WORKING_DIR"
+                terraform init -input=false
+
+                if [ "$TF_ACTION" = "destroy" ]; then
+                  terraform destroy -auto-approve -input=false -var="aws_region=$AWS_REGION" $TERRAFORM_EXTRA_ARGS
+                else
+                  terraform plan -input=false -out=tfplan -var="aws_region=$AWS_REGION" $TERRAFORM_EXTRA_ARGS
+                  terraform apply -input=false -auto-approve tfplan
+                fi
+                '''
+            }
+        }
+
+        stage('Post Deploy: Seed DB and Run Spark Once') {
+            when {
+                allOf {
+                    expression { return params.DEPLOY_INFRA }
+                    expression { return params.RUN_POST_DEPLOY_JOBS }
+                    expression { return params.TF_ACTION == 'apply' }
+                }
+            }
+            steps {
+                sh '''
+                cd "$TF_WORKING_DIR"
+
+                OUTPUT_JSON="$(terraform output -json)"
+                CLUSTER_NAME="$(echo "$OUTPUT_JSON" | jq -r '.ecs_cluster_name.value')"
+                SEED_TASK_DEF="$(echo "$OUTPUT_JSON" | jq -r '.db_seeder_task_definition_arn.value')"
+                SPARK_TASK_DEF="$(echo "$OUTPUT_JSON" | jq -r '.spark_task_definition_arn.value')"
+                ECS_SG_ID="$(echo "$OUTPUT_JSON" | jq -r '.ecs_security_group_id.value')"
+                SUBNETS_CSV="$(echo "$OUTPUT_JSON" | jq -r '.private_subnet_ids.value | map("\\"" + . + "\\"") | join(",")')"
+                SG_JSON="\\"$ECS_SG_ID\\""
+                NETWORK_CONF="awsvpcConfiguration={subnets=[$SUBNETS_CSV],securityGroups=[$SG_JSON],assignPublicIp=DISABLED}"
+
+                run_and_wait() {
+                  local label="$1"
+                  local task_def="$2"
+                  local task_arn
+                  local exit_code
+
+                  task_arn="$(aws ecs run-task \
+                    --cluster "$CLUSTER_NAME" \
+                    --launch-type FARGATE \
+                    --task-definition "$task_def" \
+                    --network-configuration "$NETWORK_CONF" \
+                    --query 'tasks[0].taskArn' \
+                    --output text)"
+
+                  if [ -z "$task_arn" ] || [ "$task_arn" = "None" ]; then
+                    echo "Failed to start $label task"
+                    exit 1
+                  fi
+
+                  echo "$label task started: $task_arn"
+                  aws ecs wait tasks-stopped --cluster "$CLUSTER_NAME" --tasks "$task_arn"
+                  exit_code="$(aws ecs describe-tasks --cluster "$CLUSTER_NAME" --tasks "$task_arn" --query 'tasks[0].containers[0].exitCode' --output text)"
+
+                  if [ "$exit_code" != "0" ]; then
+                    echo "$label failed with exit code $exit_code"
+                    aws ecs describe-tasks --cluster "$CLUSTER_NAME" --tasks "$task_arn" --output table
+                    exit 1
+                  fi
+
+                  echo "$label completed successfully"
+                }
+
+                run_and_wait "db-seeder" "$SEED_TASK_DEF"
+                run_and_wait "spark-once" "$SPARK_TASK_DEF"
+                '''
             }
         }
     }

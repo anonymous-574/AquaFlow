@@ -32,8 +32,9 @@
    - [Create the Pipeline Job](#5-create-the-pipeline-job)
    - [Run the Pipeline](#6-run-the-pipeline)
    - [Verify SonarQube Results](#7-verify-sonarqube-results)
-9. [Teardown](#teardown)
-10. [Test Credentials](#test-credentials)
+9. [AWS Deployment with Terraform](#aws-deployment-with-terraform)
+10. [Teardown](#teardown)
+11. [Test Credentials](#test-credentials)
 
 ---
 
@@ -278,12 +279,14 @@ JWT tokens are stateless — the server does not need to store session state to 
 .
 ├── README.md
 ├── docker-compose.yml               # Full local dev environment
-├── docker-compose.cicd.yml          # Jenkins + SonarQube CI/CD stack
+├── docker-compose.cicd.yml          # Jenkins + SonarQube + Prometheus + Grafana CI/CD stack
 ├── prometheus.yml                   # Prometheus scrape config
 │
 ├── backend/
 │   ├── api_gateway/
-│   │   └── nginx.conf               # Path routing, correlation ID, upstream config
+│   │   ├── Dockerfile
+│   │   ├── nginx.conf               # Local static gateway config
+│   │   └── nginx.conf.template      # Env-driven config used in container/ECS
 │   ├── auth_service/                # JWT auth, user registration, profile
 │   ├── supplier_service/            # Tanker management, owner dashboard
 │   ├── booking_service/             # Order lifecycle, Stripe payment intents
@@ -303,11 +306,20 @@ JWT tokens are stateless — the server does not need to store session state to 
 │   ├── process_data.py              # PySpark: read parquet, aggregate, write to iot_db
 │   └── requirements.txt
 │
-├── frontend/                        # React + Vite client
+├── frontend/                        # React + Vite client (Dockerized)
+│   ├── Dockerfile
+│   └── nginx.conf
 │
 ├── grafana/
 │   ├── dashboards/                  # Pre-built dashboard JSON
 │   └── provisioning/                # Auto-provisioned datasources
+│
+├── infra/
+│   └── terraform/                   # Modular AWS IaC (deploy + destroy in one workflow)
+│
+├── ops/
+│   └── tools/
+│       └── prometheus.template.yml  # Prometheus template used by CI/CD stack
 │
 ├── data/                            # Shared volume: raw IoT parquet files
 └── spark_libs/
@@ -367,7 +379,7 @@ docker compose up -d --build
 docker ps    # verify all containers are healthy
 ```
 
-This starts: PostgreSQL (with 5 logical DBs), Redis, all 5 Flask microservices, Nginx gateway, Spark Master + Worker, Prometheus, and Grafana.
+This starts: PostgreSQL (with 5 logical DBs), Redis, all 5 Flask microservices, Nginx gateway, Dockerized frontend, Spark Master + Worker, Prometheus, and Grafana.
 
 ---
 
@@ -413,13 +425,13 @@ This simulates the EventBridge-triggered batch job. Reads Parquet files from `da
 
 ### Step 5: Start the Frontend
 
+Frontend is now part of `docker-compose.yml` and starts automatically with the rest of the stack.
+
 ```bash
-cd frontend
-npm install
-npm run dev
+docker compose up -d --build frontend
 ```
 
-Frontend runs at `http://localhost:5173` by default and proxies API calls to the Nginx gateway at `http://localhost:5001`.
+Frontend runs at `http://localhost:5173` and calls the Nginx API Gateway at `http://localhost:5001`.
 
 ---
 
@@ -427,6 +439,7 @@ Frontend runs at `http://localhost:5173` by default and proxies API calls to the
 
 | Service | URL | Notes |
 |---|---|---|
+| Frontend | `http://localhost:5173` | React app served by Nginx container |
 | API Gateway | `http://localhost:5001` | All backend API routes |
 | Prometheus | `http://localhost:9090` | Metrics scraping |
 | Grafana | `http://localhost:3000` | Login: `admin` / `admin` |
@@ -502,7 +515,7 @@ pytest tests/ -v --cov=. --cov-report=xml                 # generates coverage.x
 
 ## CI/CD Pipeline — Jenkins + SonarQube
 
-The project ships with a fully containerized local CI/CD environment. On push, Jenkins uses `backend/Jenkinsfile` to: install dependencies per service, compile all 5 service packages, run the Pytest suite, and submit a `coverage.xml` report to SonarQube for quality gate evaluation.
+The project ships with a fully containerized local CI/CD + observability environment. On push, Jenkins uses `backend/Jenkinsfile` to run backend tests, build frontend assets, submit SonarQube analysis, and (optionally) build/push images + run Terraform.
 
 ---
 
@@ -516,6 +529,8 @@ docker compose -f docker-compose.cicd.yml up -d
 |---|---|
 | Jenkins | `http://localhost:8081` |
 | SonarQube | `http://localhost:9000` |
+| Prometheus | `http://localhost:9090` |
+| Grafana | `http://localhost:3000` |
 
 ---
 
@@ -553,10 +568,10 @@ docker exec -it water_cicd_jenkins cat /var/jenkins_home/secrets/initialAdminPas
    - ID: `sonar-token`
 2. Go to **Manage Jenkins → System → SonarQube Servers → Add SonarQube**.
    - Name: `SonarQube`
-   - Server URL: `http://host.docker.internal:9000`
+   - Server URL: `http://sonarqube:9000`
    - Server authentication token: `sonar-token`
 
-> `host.docker.internal` resolves to the Docker host from inside a container, bridging Jenkins to the SonarQube container on your machine.
+> Jenkins and SonarQube are on the same compose network, so `http://sonarqube:9000` is the stable in-network endpoint.
 
 ---
 
@@ -613,6 +628,102 @@ In SonarQube (`http://localhost:9000`), open the `water-conservation-app` projec
 - Latest analysis timestamp is updated
 - Code smells, bugs, and vulnerability counts are visible
 - Quality gate status is shown (pass/fail)
+
+---
+
+## AWS Deployment with Terraform
+
+Infrastructure code is under `infra/terraform` and is split by concern (`vpc.tf`, `rds.tf`, `elasticache.tf`, `alb.tf`, `ecs-fargate.tf`, `ecs-spark.tf`, `ec2-tools.tf`, `iam.tf`, `outputs.tf`).
+
+### 1. Fill secrets and passwords first (before deploy)
+
+```bash
+cd infra/terraform
+cp terraform.tfvars.example terraform.tfvars
+# edit terraform.tfvars with your own values
+```
+
+You **set these values yourself** in `terraform.tfvars`; Terraform creates resources using those values:
+
+- `db_username`, `db_password`
+- `jwt_secret_key`, `internal_service_token`, `stripe_secret_key`
+- `grafana_admin_password`, `sonarqube_db_password`
+
+`SECRET_KEY` is currently not consumed by the deployed microservices code path, so it is not required in Terraform.
+
+Example quick secret generation (PowerShell):
+
+```powershell
+[guid]::NewGuid().ToString("N") + [guid]::NewGuid().ToString("N")
+```
+
+### 2. AWS credentials (required)
+
+Terraform/Jenkins need AWS credentials with permission to create VPC, ECS, RDS, ElastiCache, ALB, IAM, EC2, ECR, EventBridge.
+
+Use **one** of these:
+- Jenkins host IAM role (recommended on AWS EC2)
+- Jenkins credentials/environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, optional `AWS_SESSION_TOKEN`)
+- local AWS CLI profile when running Terraform manually
+
+Do **not** put AWS access keys inside Terraform files.
+
+### 3. Build and push images to ECR
+
+Use Jenkins (`backend/Jenkinsfile`, set `BUILD_AND_PUSH_IMAGES=true`) or run equivalent local `docker build` + `docker push` commands for:
+
+- frontend
+- api_gateway
+- db_seeder
+- auth_service
+- supplier_service
+- booking_service
+- gamification_service
+- iot_analytics_service
+- spark_job
+
+### 4. Deploy everything (single command)
+
+```bash
+terraform init && terraform apply -auto-approve
+```
+
+After apply, Terraform outputs:
+- public ALB DNS (frontend + `/api/*`)
+- tools EC2 public IP (Jenkins/SonarQube/Prometheus/Grafana)
+- RDS + Redis endpoints
+- ECR repository URLs
+
+### 5. Destroy everything (single command)
+
+```bash
+terraform destroy -auto-approve
+```
+
+> Spark is scheduled by default every 12 hours (`cron(0 */12 * * ? *)`).  
+> For midnight UTC runs, set `spark_schedule_expression = "cron(0 0 * * ? *)"` in `terraform.tfvars`.
+
+### Jenkins can run the full pipeline end-to-end
+
+`backend/Jenkinsfile` now supports:
+1. Build + test + Sonar scan
+2. Build/push all required images
+3. Terraform apply/destroy
+4. After apply: run DB seeding task once
+5. Immediately run Spark task once
+
+Recommended Jenkins run parameters:
+
+- `BUILD_AND_PUSH_IMAGES=true`
+- `DEPLOY_INFRA=true`
+- `TF_ACTION=apply`
+- `RUN_POST_DEPLOY_JOBS=true`
+- `AWS_REGION=<your-region>`
+- `ECR_REGISTRY=<your-account>.dkr.ecr.<region>.amazonaws.com`
+- `TF_WORKING_DIR=infra/terraform`
+- `TERRAFORM_EXTRA_ARGS=-var-file=terraform.tfvars`
+
+This gives you a single Jenkins execution that deploys and initializes the environment.
 
 ---
 

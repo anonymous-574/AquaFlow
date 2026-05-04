@@ -1,8 +1,9 @@
 # process_data.py
-import sys
 import os
+import sys
+
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, max as _max, lag, coalesce, lit
+from pyspark.sql.functions import coalesce, col, lag, max as _max, to_date
 from pyspark.sql.window import Window
 
 jar_path = "/app/postgresql.jar"
@@ -24,10 +25,21 @@ spark = (
 
 db_props = {"user": db_user, "password": db_pass, "driver": "org.postgresql.Driver"}
 
-# 1. Read Raw IoT Data from Parquet
-print(">>> Reading Parquet Data Lake...")
-# Spark automatically discovers the 'date' column from the folder structure!
-df_raw = spark.read.parquet("/opt/analytics/data/raw/water_readings/")
+# 1. Read Raw IoT Data
+parquet_path = os.environ.get("SPARK_RAW_PARQUET_PATH", "/opt/analytics/data/raw/water_readings/")
+print(f">>> Looking for Parquet data at: {parquet_path}")
+use_parquet = os.path.exists(parquet_path) and any(os.scandir(parquet_path))
+
+if use_parquet:
+    print(">>> Reading Parquet Data Lake...")
+    # Spark automatically discovers the 'date' column from the folder structure.
+    df_raw = spark.read.parquet(parquet_path)
+else:
+    print(">>> Parquet data not found. Falling back to PostgreSQL table: water_readings")
+    df_raw = (
+        spark.read.jdbc(jdbc_url, "water_readings", properties=db_props)
+        .withColumn("date", to_date(col("timestamp")))
+    )
 
 # 2. Get End-of-Day Readings
 # Since meters only go up, daily usage = Max(reading today) - Max(reading yesterday)

@@ -6,11 +6,25 @@ http {
         "" req-$msec-$connection;
     }
 
-    upstream auth_backend { server auth_service:5000; }
-    upstream supplier_backend { server supplier_service:5000; }
-    upstream booking_backend { server booking_service:5000; }
-    upstream gamification_backend { server gamification_service:5000; }
-    upstream analytics_backend { server iot_analytics_service:5000; }
+    upstream auth_backend {
+        server ${AUTH_SERVICE_HOST}:5000;
+    }
+
+    upstream supplier_backend {
+        server ${SUPPLIER_SERVICE_HOST}:5000;
+    }
+
+    upstream booking_backend {
+        server ${BOOKING_SERVICE_HOST}:5000;
+    }
+
+    upstream gamification_backend {
+        server ${GAMIFICATION_SERVICE_HOST}:5000;
+    }
+
+    upstream analytics_backend {
+        server ${IOT_ANALYTICS_SERVICE_HOST}:5000;
+    }
 
     server {
         listen 80;
